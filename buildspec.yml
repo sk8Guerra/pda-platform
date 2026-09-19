@@ -1,0 +1,86 @@
+# =============================================================================
+# AWS CodeBuild - Especificacion de construccion
+#
+# Fases: instalar dependencias, ejecutar la bateria de pruebas, construir las
+# cinco imagenes (monolito y los cuatro modulos) y publicarlas en Amazon ECR.
+#
+# Si las pruebas fallan, la construccion se detiene y ninguna imagen se publica:
+# ese es el control de calidad automatico que exige la practica DevOps.
+#
+# Variables de entorno requeridas en el proyecto de CodeBuild:
+#   AWS_ACCOUNT_ID, AWS_DEFAULT_REGION, ECR_REPOSITORIO
+# =============================================================================
+
+version: 0.2
+
+env:
+  variables:
+    NODE_ENV: test
+    ECR_REPOSITORIO: pda-platform
+  exported-variables:
+    - IMAGEN_TAG
+
+phases:
+
+  install:
+    runtime-versions:
+      nodejs: 20
+    commands:
+      - echo "Instalando dependencias..."
+      - npm ci
+
+  pre_build:
+    commands:
+      - echo "Autenticando contra Amazon ECR..."
+      - aws ecr get-login-password --region "$AWS_DEFAULT_REGION" | docker login --username AWS --password-stdin "$AWS_ACCOUNT_ID.dkr.ecr.$AWS_DEFAULT_REGION.amazonaws.com"
+      - export REGISTRO="$AWS_ACCOUNT_ID.dkr.ecr.$AWS_DEFAULT_REGION.amazonaws.com"
+      - export IMAGEN_TAG="${CODEBUILD_RESOLVED_SOURCE_VERSION:0:8}"
+      - echo "Etiqueta de imagen $IMAGEN_TAG"
+      - echo "Ejecutando la bateria de pruebas..."
+      - npm run test:ci
+
+  build:
+    commands:
+      - echo "Construyendo la imagen del monolito..."
+      - docker build -f docker/Dockerfile -t "$REGISTRO/$ECR_REPOSITORIO:$IMAGEN_TAG" -t "$REGISTRO/$ECR_REPOSITORIO:latest" .
+      - |
+        for SERVICIO in auth catalogo inscripcion pagos; do
+          echo "Construyendo la imagen del servicio $SERVICIO..."
+          docker build -f "docker/$SERVICIO/Dockerfile" \
+            -t "$REGISTRO/$ECR_REPOSITORIO-$SERVICIO:$IMAGEN_TAG" \
+            -t "$REGISTRO/$ECR_REPOSITORIO-$SERVICIO:latest" .
+        done
+
+  post_build:
+    commands:
+      - echo "Publicando imagenes en Amazon ECR..."
+      - docker push "$REGISTRO/$ECR_REPOSITORIO:$IMAGEN_TAG"
+      - docker push "$REGISTRO/$ECR_REPOSITORIO:latest"
+      - |
+        for SERVICIO in auth catalogo inscripcion pagos; do
+          docker push "$REGISTRO/$ECR_REPOSITORIO-$SERVICIO:$IMAGEN_TAG"
+          docker push "$REGISTRO/$ECR_REPOSITORIO-$SERVICIO:latest"
+        done
+      - echo "Generando el descriptor de despliegue..."
+      - printf '[{"name":"api","imageUri":"%s"}]' "$REGISTRO/$ECR_REPOSITORIO:$IMAGEN_TAG" > imagedefinitions.json
+      - cat imagedefinitions.json
+
+reports:
+  pruebas-unitarias:
+    files:
+      - "reports/junit.xml"
+    file-format: JUNITXML
+  cobertura:
+    files:
+      - "coverage/cobertura-coverage.xml"
+    file-format: COBERTURAXML
+
+artifacts:
+  files:
+    - imagedefinitions.json
+    - docker-compose.yml
+  name: pda-artefactos
+
+cache:
+  paths:
+    - "node_modules/**/*"

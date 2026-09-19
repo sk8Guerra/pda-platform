@@ -1,0 +1,205 @@
+# =============================================================================
+# Perfect Dance Academy - Entorno de contenedores
+#
+# PostgreSQL y Redis se levantan siempre. Sobre ellos se puede ejecutar una de
+# dos topologias, seleccionables con perfiles de Compose:
+#
+#   docker compose --profile monolito up -d
+#       Un solo contenedor de aplicacion con los cuatro modulos montados.
+#       Es la topologia por defecto y la que corresponde a la arquitectura
+#       documentada para la primera version de la plataforma.
+#
+#   docker compose --profile microservicios up -d
+#       Cuatro contenedores independientes, uno por modulo, detras de una
+#       puerta de enlace que enruta por prefijo de URL. Es la topologia de
+#       evolucion prevista, construida desde el mismo codigo fuente.
+#
+# Requisito previo: copiar .env.example como .env y completar los valores.
+# =============================================================================
+
+name: pda-platform
+
+x-aplicacion-comun: &aplicacion-comun
+  environment: &entorno-comun
+    NODE_ENV: ${NODE_ENV:-development}
+    LOG_LEVEL: ${LOG_LEVEL:-info}
+    POSTGRES_HOST: postgres
+    POSTGRES_PORT: 5432
+    POSTGRES_DB: ${POSTGRES_DB:-pda}
+    POSTGRES_USER: ${POSTGRES_USER:-pda_app}
+    POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-pda_local}
+    REDIS_HOST: redis
+    REDIS_PORT: 6379
+    JWT_SECRET: ${JWT_SECRET:-secreto-de-desarrollo-no-usar-en-produccion}
+    JWT_EXPIRACION: ${JWT_EXPIRACION:-30m}
+    BCRYPT_ROUNDS: ${BCRYPT_ROUNDS:-12}
+    CORS_ORIGENES: ${CORS_ORIGENES:-http://localhost:5173}
+  depends_on:
+    postgres:
+      condition: service_healthy
+    redis:
+      condition: service_healthy
+  networks:
+    - pda
+  restart: unless-stopped
+
+services:
+
+  # ---------------------------------------------------------------------------
+  # Datos
+  # ---------------------------------------------------------------------------
+  postgres:
+    image: postgres:16-alpine
+    container_name: pda-postgres
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-pda}
+      POSTGRES_USER: ${POSTGRES_USER:-pda_app}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-pda_local}
+      TZ: America/Guatemala
+    ports:
+      - "${POSTGRES_PUERTO_HOST:-5432}:5432"
+    volumes:
+      - datos-postgres:/var/lib/postgresql/data
+      # Los scripts se ejecutan en orden alfabetico la primera vez que se crea
+      # el volumen: primero el esquema, despues los datos semilla.
+      - ./db/init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-pda_app} -d ${POSTGRES_DB:-pda}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+    networks:
+      - pda
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    container_name: pda-redis
+    command: ["redis-server", "--appendonly", "yes", "--maxmemory", "256mb", "--maxmemory-policy", "allkeys-lru"]
+    ports:
+      - "${REDIS_PUERTO_HOST:-6379}:6379"
+    volumes:
+      - datos-redis:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 10
+    networks:
+      - pda
+    restart: unless-stopped
+
+  # ---------------------------------------------------------------------------
+  # Topologia 1: monolito modular
+  # ---------------------------------------------------------------------------
+  api:
+    <<: *aplicacion-comun
+    profiles: ["monolito"]
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
+    image: pda-platform:${IMAGEN_TAG:-latest}
+    container_name: pda-api
+    environment:
+      <<: *entorno-comun
+      SERVICE: monolito
+      PORT: 3000
+    ports:
+      - "${API_PUERTO_HOST:-3000}:3000"
+
+  # ---------------------------------------------------------------------------
+  # Topologia 2: un contenedor por modulo
+  # ---------------------------------------------------------------------------
+  auth:
+    <<: *aplicacion-comun
+    profiles: ["microservicios"]
+    build:
+      context: .
+      dockerfile: docker/auth/Dockerfile
+    image: pda-auth:${IMAGEN_TAG:-latest}
+    container_name: pda-auth
+    environment:
+      <<: *entorno-comun
+      SERVICE: auth
+      PORT: 3001
+    ports:
+      - "3001:3001"
+
+  catalogo:
+    <<: *aplicacion-comun
+    profiles: ["microservicios"]
+    build:
+      context: .
+      dockerfile: docker/catalogo/Dockerfile
+    image: pda-catalogo:${IMAGEN_TAG:-latest}
+    container_name: pda-catalogo
+    environment:
+      <<: *entorno-comun
+      SERVICE: catalogo
+      PORT: 3002
+    ports:
+      - "3002:3002"
+
+  inscripcion:
+    <<: *aplicacion-comun
+    profiles: ["microservicios"]
+    build:
+      context: .
+      dockerfile: docker/inscripcion/Dockerfile
+    image: pda-inscripcion:${IMAGEN_TAG:-latest}
+    container_name: pda-inscripcion
+    environment:
+      <<: *entorno-comun
+      SERVICE: inscripcion
+      PORT: 3003
+    ports:
+      - "3003:3003"
+
+  pagos:
+    <<: *aplicacion-comun
+    profiles: ["microservicios"]
+    build:
+      context: .
+      dockerfile: docker/pagos/Dockerfile
+    image: pda-pagos:${IMAGEN_TAG:-latest}
+    container_name: pda-pagos
+    environment:
+      <<: *entorno-comun
+      SERVICE: pagos
+      PORT: 3004
+      PASARELA_URL: ${PASARELA_URL:-}
+      PASARELA_API_KEY: ${PASARELA_API_KEY:-}
+      PASARELA_COMERCIO_ID: ${PASARELA_COMERCIO_ID:-}
+    ports:
+      - "3004:3004"
+
+  # El cliente web consume una sola direccion; la puerta de enlace decide a que
+  # contenedor corresponde cada prefijo de ruta.
+  gateway:
+    image: nginx:1.27-alpine
+    profiles: ["microservicios"]
+    container_name: pda-gateway
+    volumes:
+      - ./docker/gateway/nginx.conf:/etc/nginx/conf.d/default.conf:ro
+    ports:
+      - "${GATEWAY_PUERTO_HOST:-8080}:80"
+    depends_on:
+      - auth
+      - catalogo
+      - inscripcion
+      - pagos
+    networks:
+      - pda
+    restart: unless-stopped
+
+volumes:
+  datos-postgres:
+    name: pda-datos-postgres
+  datos-redis:
+    name: pda-datos-redis
+
+networks:
+  pda:
+    name: pda-red
+    driver: bridge

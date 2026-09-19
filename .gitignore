@@ -1,0 +1,53 @@
+# Dependencias
+node_modules/
+npm-debug.log*
+yarn-error.log*
+package-lock.json.bak
+
+# Variables de entorno: nunca se versionan (RNF-016, RNF-017)
+.env
+.env.local
+.env.*.local
+*.pem
+*.key
+*.p12
+credenciales*.json
+
+# Reportes y cobertura generados por el pipeline
+coverage/
+reports/
+*.lcov
+junit.xml
+
+# Artefactos de construccion
+dist/
+build/
+*.tgz
+
+# Volumenes y datos locales de contenedores
+docker/volumes/
+postgres-data/
+redis-data/
+pgdata/
+
+# Registros
+logs/
+*.log
+
+# Sistema operativo
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Editores
+.vscode/*
+!.vscode/extensions.json
+!.vscode/settings.example.json
+.idea/
+*.swp
+*~
+
+# Terraform / estado de infraestructura
+*.tfstate
+*.tfstate.*
+.terraform/

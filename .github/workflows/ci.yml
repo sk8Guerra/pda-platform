@@ -1,0 +1,60 @@
+# =============================================================================
+# Verificacion rapida en cada propuesta de cambio.
+#
+# La canalizacion formal de la entrega vive en AWS (CodePipeline y CodeBuild).
+# Este flujo es complementario y gratuito: corre las pruebas sobre cada rama y
+# cada solicitud de incorporacion de cambios, de modo que un error se detecta
+# antes de que la rama llegue a main y consuma minutos de construccion en AWS.
+# =============================================================================
+
+name: Pruebas
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main, develop]
+
+jobs:
+
+  pruebas:
+    name: Pruebas y construccion de imagenes
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Obtener el codigo
+        uses: actions/checkout@v4
+
+      - name: Preparar Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+
+      - name: Instalar dependencias
+        run: npm ci
+
+      - name: Ejecutar la bateria de pruebas
+        run: npm run test:ci
+
+      - name: Publicar el reporte de pruebas
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: reporte-pruebas
+          path: |
+            reports/
+            coverage/
+          retention-days: 7
+
+      - name: Verificar que las cinco imagenes construyen
+        run: |
+          docker build -f docker/Dockerfile -t pda-platform:ci .
+          for SERVICIO in auth catalogo inscripcion pagos; do
+            docker build -f "docker/$SERVICIO/Dockerfile" -t "pda-$SERVICIO:ci" .
+          done
+
+      - name: Validar la definicion del entorno de contenedores
+        run: |
+          docker compose --profile monolito config --quiet
+          docker compose --profile microservicios config --quiet

@@ -1,0 +1,385 @@
+AWSTemplateFormatVersion: '2010-09-09'
+
+Description: >
+  Perfect Dance Academy - Canalizacion de integracion continua en AWS.
+  Crea los repositorios de imagenes en Amazon ECR, el proyecto de CodeBuild que
+  ejecuta las pruebas y construye las imagenes, la canalizacion de CodePipeline
+  conectada al repositorio de GitHub y el panel de CloudWatch que concentra los
+  indicadores de las construcciones.
+
+Parameters:
+
+  NombreProyecto:
+    Type: String
+    Default: pda-platform
+    Description: Prefijo aplicado a todos los recursos creados por esta plantilla.
+
+  RepositorioGitHub:
+    Type: String
+    Description: Repositorio de origen en formato propietario/nombre.
+    Default: usuario/pda-platform
+
+  RamaGitHub:
+    Type: String
+    Default: main
+    Description: Rama que dispara la canalizacion.
+
+  ConexionCodeStarArn:
+    Type: String
+    Description: >
+      ARN de la conexion de CodeConnections con GitHub. Se crea una sola vez desde
+      la consola (Developer Tools, Settings, Connections) y se autoriza desde
+      GitHub; su estado debe ser Available antes de desplegar esta plantilla.
+
+Resources:
+
+  # ---------------------------------------------------------------------------
+  # Registro de imagenes
+  # ---------------------------------------------------------------------------
+
+  RepositorioImagenMonolito:
+    Type: AWS::ECR::Repository
+    Properties:
+      RepositoryName: !Ref NombreProyecto
+      ImageScanningConfiguration:
+        ScanOnPush: true
+      LifecyclePolicy:
+        LifecyclePolicyText: |
+          {
+            "rules": [{
+              "rulePriority": 1,
+              "description": "Conservar unicamente las diez imagenes mas recientes",
+              "selection": {
+                "tagStatus": "any",
+                "countType": "imageCountMoreThan",
+                "countNumber": 10
+              },
+              "action": { "type": "expire" }
+            }]
+          }
+
+  RepositorioImagenAuth:
+    Type: AWS::ECR::Repository
+    Properties:
+      RepositoryName: !Sub '${NombreProyecto}-auth'
+      ImageScanningConfiguration:
+        ScanOnPush: true
+
+  RepositorioImagenCatalogo:
+    Type: AWS::ECR::Repository
+    Properties:
+      RepositoryName: !Sub '${NombreProyecto}-catalogo'
+      ImageScanningConfiguration:
+        ScanOnPush: true
+
+  RepositorioImagenInscripcion:
+    Type: AWS::ECR::Repository
+    Properties:
+      RepositoryName: !Sub '${NombreProyecto}-inscripcion'
+      ImageScanningConfiguration:
+        ScanOnPush: true
+
+  RepositorioImagenPagos:
+    Type: AWS::ECR::Repository
+    Properties:
+      RepositoryName: !Sub '${NombreProyecto}-pagos'
+      ImageScanningConfiguration:
+        ScanOnPush: true
+
+  # ---------------------------------------------------------------------------
+  # Almacenamiento de artefactos
+  # ---------------------------------------------------------------------------
+
+  BucketArtefactos:
+    Type: AWS::S3::Bucket
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      BucketName: !Sub '${NombreProyecto}-artefactos-${AWS::AccountId}'
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      LifecycleConfiguration:
+        Rules:
+          - Id: depurar-artefactos-antiguos
+            Status: Enabled
+            ExpirationInDays: 30
+
+  # ---------------------------------------------------------------------------
+  # Permisos
+  # ---------------------------------------------------------------------------
+
+  RolCodeBuild:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub '${NombreProyecto}-rol-codebuild'
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: codebuild.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: permisos-construccion
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - logs:CreateLogGroup
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                Resource: !Sub 'arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/codebuild/${NombreProyecto}*'
+              - Effect: Allow
+                Action:
+                  - ecr:GetAuthorizationToken
+                Resource: '*'
+              - Effect: Allow
+                Action:
+                  - ecr:BatchCheckLayerAvailability
+                  - ecr:CompleteLayerUpload
+                  - ecr:InitiateLayerUpload
+                  - ecr:PutImage
+                  - ecr:UploadLayerPart
+                Resource:
+                  - !GetAtt RepositorioImagenMonolito.Arn
+                  - !GetAtt RepositorioImagenAuth.Arn
+                  - !GetAtt RepositorioImagenCatalogo.Arn
+                  - !GetAtt RepositorioImagenInscripcion.Arn
+                  - !GetAtt RepositorioImagenPagos.Arn
+              - Effect: Allow
+                Action:
+                  - s3:GetObject
+                  - s3:GetObjectVersion
+                  - s3:PutObject
+                Resource: !Sub '${BucketArtefactos.Arn}/*'
+              - Effect: Allow
+                Action:
+                  - codebuild:CreateReportGroup
+                  - codebuild:CreateReport
+                  - codebuild:UpdateReport
+                  - codebuild:BatchPutTestCases
+                  - codebuild:BatchPutCodeCoverages
+                Resource: !Sub 'arn:aws:codebuild:${AWS::Region}:${AWS::AccountId}:report-group/${NombreProyecto}*'
+
+  RolCodePipeline:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub '${NombreProyecto}-rol-codepipeline'
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: codepipeline.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: permisos-canalizacion
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - s3:GetObject
+                  - s3:GetObjectVersion
+                  - s3:GetBucketVersioning
+                  - s3:PutObject
+                Resource:
+                  - !GetAtt BucketArtefactos.Arn
+                  - !Sub '${BucketArtefactos.Arn}/*'
+              - Effect: Allow
+                Action:
+                  - codebuild:StartBuild
+                  - codebuild:BatchGetBuilds
+                Resource: !GetAtt ProyectoCodeBuild.Arn
+              - Effect: Allow
+                Action:
+                  - codestar-connections:UseConnection
+                  - codeconnections:UseConnection
+                Resource: !Ref ConexionCodeStarArn
+
+  # ---------------------------------------------------------------------------
+  # Construccion
+  # ---------------------------------------------------------------------------
+
+  GrupoRegistrosCodeBuild:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub '/aws/codebuild/${NombreProyecto}-build'
+      RetentionInDays: 30
+
+  ProyectoCodeBuild:
+    Type: AWS::CodeBuild::Project
+    Properties:
+      Name: !Sub '${NombreProyecto}-build'
+      Description: Ejecuta las pruebas y construye las imagenes de contenedor.
+      ServiceRole: !GetAtt RolCodeBuild.Arn
+      Artifacts:
+        Type: CODEPIPELINE
+      Source:
+        Type: CODEPIPELINE
+        BuildSpec: buildspec.yml
+      Environment:
+        Type: LINUX_CONTAINER
+        ComputeType: BUILD_GENERAL1_SMALL
+        Image: aws/codebuild/amazonlinux2-x86_64-standard:5.0
+        # Necesario para ejecutar el motor de Docker dentro de la construccion.
+        PrivilegedMode: true
+        EnvironmentVariables:
+          - Name: AWS_ACCOUNT_ID
+            Value: !Ref AWS::AccountId
+          - Name: AWS_DEFAULT_REGION
+            Value: !Ref AWS::Region
+          - Name: ECR_REPOSITORIO
+            Value: !Ref NombreProyecto
+      Cache:
+        Type: LOCAL
+        Modes:
+          - LOCAL_CUSTOM_CACHE
+          - LOCAL_DOCKER_LAYER_CACHE
+      TimeoutInMinutes: 20
+      LogsConfig:
+        CloudWatchLogs:
+          Status: ENABLED
+          GroupName: !Ref GrupoRegistrosCodeBuild
+
+  # ---------------------------------------------------------------------------
+  # Canalizacion
+  # ---------------------------------------------------------------------------
+
+  Canalizacion:
+    Type: AWS::CodePipeline::Pipeline
+    Properties:
+      Name: !Sub '${NombreProyecto}-canalizacion'
+      RoleArn: !GetAtt RolCodePipeline.Arn
+      ArtifactStore:
+        Type: S3
+        Location: !Ref BucketArtefactos
+      Stages:
+
+        - Name: Origen
+          Actions:
+            - Name: GitHub
+              ActionTypeId:
+                Category: Source
+                Owner: AWS
+                Provider: CodeStarSourceConnection
+                Version: '1'
+              Configuration:
+                ConnectionArn: !Ref ConexionCodeStarArn
+                FullRepositoryId: !Ref RepositorioGitHub
+                BranchName: !Ref RamaGitHub
+                DetectChanges: true
+              OutputArtifacts:
+                - Name: CodigoFuente
+              RunOrder: 1
+
+        - Name: ConstruccionYPruebas
+          Actions:
+            - Name: CodeBuild
+              ActionTypeId:
+                Category: Build
+                Owner: AWS
+                Provider: CodeBuild
+                Version: '1'
+              Configuration:
+                ProjectName: !Ref ProyectoCodeBuild
+              InputArtifacts:
+                - Name: CodigoFuente
+              OutputArtifacts:
+                - Name: Artefactos
+              RunOrder: 1
+
+  # ---------------------------------------------------------------------------
+  # Observabilidad
+  # ---------------------------------------------------------------------------
+
+  AlarmaConstruccionesFallidas:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub '${NombreProyecto}-construcciones-fallidas'
+      AlarmDescription: Se activa cuando una construccion termina en error.
+      Namespace: AWS/CodeBuild
+      MetricName: FailedBuilds
+      Dimensions:
+        - Name: ProjectName
+          Value: !Ref ProyectoCodeBuild
+      Statistic: Sum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 0
+      ComparisonOperator: GreaterThanThreshold
+      TreatMissingData: notBreaching
+
+  PanelCloudWatch:
+    Type: AWS::CloudWatch::Dashboard
+    Properties:
+      DashboardName: !Sub '${NombreProyecto}-devops'
+      DashboardBody: !Sub |
+        {
+          "widgets": [
+            {
+              "type": "metric",
+              "x": 0, "y": 0, "width": 12, "height": 6,
+              "properties": {
+                "title": "Construcciones exitosas y fallidas",
+                "region": "${AWS::Region}",
+                "stat": "Sum",
+                "period": 3600,
+                "view": "timeSeries",
+                "metrics": [
+                  [ "AWS/CodeBuild", "SucceededBuilds", "ProjectName", "${NombreProyecto}-build" ],
+                  [ ".", "FailedBuilds", ".", "." ]
+                ]
+              }
+            },
+            {
+              "type": "metric",
+              "x": 12, "y": 0, "width": 12, "height": 6,
+              "properties": {
+                "title": "Duracion de la construccion (segundos)",
+                "region": "${AWS::Region}",
+                "stat": "Average",
+                "period": 3600,
+                "view": "timeSeries",
+                "metrics": [
+                  [ "AWS/CodeBuild", "Duration", "ProjectName", "${NombreProyecto}-build" ]
+                ]
+              }
+            },
+            {
+              "type": "log",
+              "x": 0, "y": 6, "width": 24, "height": 6,
+              "properties": {
+                "title": "Ultimos errores registrados en la construccion",
+                "region": "${AWS::Region}",
+                "query": "SOURCE '/aws/codebuild/${NombreProyecto}-build' | fields @timestamp, @message | filter @message like /(?i)(error|failed|FAIL)/ | sort @timestamp desc | limit 50"
+              }
+            }
+          ]
+        }
+
+Outputs:
+
+  UrlCanalizacion:
+    Description: Consola de la canalizacion de CodePipeline.
+    Value: !Sub 'https://${AWS::Region}.console.aws.amazon.com/codesuite/codepipeline/pipelines/${Canalizacion}/view?region=${AWS::Region}'
+
+  UrlPanel:
+    Description: Panel de CloudWatch con los indicadores de construccion.
+    Value: !Sub 'https://${AWS::Region}.console.aws.amazon.com/cloudwatch/home?region=${AWS::Region}#dashboards:name=${NombreProyecto}-devops'
+
+  RegistroImagenes:
+    Description: Direccion del registro de imagenes de Amazon ECR.
+    Value: !Sub '${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com'
+
+  BucketDeArtefactos:
+    Description: Bucket donde CodePipeline deposita los artefactos de cada ejecucion.
+    Value: !Ref BucketArtefactos
