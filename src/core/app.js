@@ -1,5 +1,7 @@
 'use strict';
 
+const path = require('path');
+
 const express = require('express');
 const helmet = require('helmet');
 const cors = require('cors');
@@ -46,6 +48,14 @@ const crearApp = (servicio = config.servicio) => {
     });
     next();
   });
+
+  // Consola operativa: pantalla estatica que consume la misma API HTTP que
+  // cualquier otro cliente. Es la superficie que ejercitan las pruebas de
+  // aceptacion en navegador y la revision manual de experiencia de uso.
+  app.use(express.static(path.join(__dirname, '..', '..', 'public'), {
+    index: 'index.html',
+    maxAge: config.entorno === 'production' ? '1h' : 0,
+  }));
 
   const activos = servicio === 'monolito' ? Object.keys(MODULOS) : [servicio];
 

@@ -1,0 +1,156 @@
+AWSTemplateFormatVersion: '2010-09-09'
+
+Description: >
+  Perfect Dance Academy - Confianza entre GitHub Actions y la cuenta de AWS.
+  Crea el proveedor de identidad OpenID Connect y el rol que la canalizacion
+  asume para publicar imagenes y desplegar en staging. No hay ninguna llave de
+  acceso de larga duracion guardada en GitHub: cada ejecucion obtiene
+  credenciales temporales y las pierde al terminar (RNF-016).
+
+Parameters:
+
+  RepositorioGitHub:
+    Type: String
+    Default: usuario/pda-platform
+    Description: >
+      Repositorio autorizado a asumir el rol, en formato propietario/nombre.
+      Ninguna otra cuenta ni otro repositorio puede obtener estas credenciales.
+
+  NombreProyecto:
+    Type: String
+    Default: pda-platform
+    Description: Prefijo aplicado a los recursos creados por esta plantilla.
+
+  CrearProveedorOIDC:
+    Type: String
+    Default: 'si'
+    AllowedValues: ['si', 'no']
+    Description: >
+      El proveedor de identidad de GitHub es unico por cuenta de AWS. Si la
+      cuenta ya lo tiene creado (por otro proyecto), elegir "no" para reutilizar
+      el existente en lugar de intentar crear uno duplicado.
+
+Conditions:
+
+  DebeCrearProveedor: !Equals [!Ref CrearProveedorOIDC, 'si']
+
+Resources:
+
+  ProveedorGitHub:
+    Type: AWS::IAM::OIDCProvider
+    Condition: DebeCrearProveedor
+    Properties:
+      Url: https://token.actions.githubusercontent.com
+      ClientIdList:
+        - sts.amazonaws.com
+      # AWS verifica la cadena de certificados del proveedor; la huella se
+      # conserva por compatibilidad con la version original de la interfaz.
+      ThumbprintList:
+        - 6938fd4d98bab03faadb97b34396831e3780aea1
+
+  RolDespliegue:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub '${NombreProyecto}-rol-github'
+      Description: Rol que asume la canalizacion de GitHub Actions.
+      MaxSessionDuration: 3600
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Federated: !If
+                - DebeCrearProveedor
+                - !Ref ProveedorGitHub
+                - !Sub 'arn:aws:iam::${AWS::AccountId}:oidc-provider/token.actions.githubusercontent.com'
+            Action: sts:AssumeRoleWithWebIdentity
+            Condition:
+              StringEquals:
+                token.actions.githubusercontent.com:aud: sts.amazonaws.com
+              StringLike:
+                # Solo la rama principal y el entorno de staging. Una rama de
+                # trabajo o una solicitud de incorporacion desde una bifurcacion
+                # del repositorio no obtienen credenciales.
+                token.actions.githubusercontent.com:sub:
+                  - !Sub 'repo:${RepositorioGitHub}:ref:refs/heads/main'
+                  - !Sub 'repo:${RepositorioGitHub}:environment:staging'
+
+      Policies:
+
+        - PolicyName: publicar-imagenes
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action: ecr:GetAuthorizationToken
+                Resource: '*'
+              - Effect: Allow
+                Action:
+                  - ecr:BatchCheckLayerAvailability
+                  - ecr:BatchGetImage
+                  - ecr:CompleteLayerUpload
+                  - ecr:DescribeRepositories
+                  - ecr:GetDownloadUrlForLayer
+                  - ecr:InitiateLayerUpload
+                  - ecr:ListImages
+                  - ecr:PutImage
+                  - ecr:UploadLayerPart
+                Resource:
+                  - !Sub 'arn:aws:ecr:${AWS::Region}:${AWS::AccountId}:repository/${NombreProyecto}'
+                  - !Sub 'arn:aws:ecr:${AWS::Region}:${AWS::AccountId}:repository/${NombreProyecto}-*'
+
+        - PolicyName: desplegar-en-staging
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - cloudformation:DescribeStacks
+                Resource: !Sub 'arn:aws:cloudformation:${AWS::Region}:${AWS::AccountId}:stack/*'
+              - Effect: Allow
+                Action:
+                  - ecs:DescribeTaskDefinition
+                  - ecs:RegisterTaskDefinition
+                Resource: '*'
+              - Effect: Allow
+                Action:
+                  - ecs:DescribeClusters
+                  - ecs:DescribeServices
+                  - ecs:DescribeTasks
+                  - ecs:ListTasks
+                  - ecs:RunTask
+                  - ecs:UpdateService
+                Resource: '*'
+                Condition:
+                  ArnEquals:
+                    ecs:cluster: !Sub 'arn:aws:ecs:${AWS::Region}:${AWS::AccountId}:cluster/${NombreProyecto}-staging'
+              - Effect: Allow
+                Action: ec2:DescribeNetworkInterfaces
+                Resource: '*'
+              - Effect: Allow
+                Action:
+                  - logs:GetLogEvents
+                  - logs:DescribeLogStreams
+                Resource: !Sub 'arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/ecs/${NombreProyecto}-staging:*'
+              # Necesario para que ECS pueda usar los roles de la tarea al
+              # lanzar una revision nueva; se limita a los dos roles del proyecto.
+              - Effect: Allow
+                Action: iam:PassRole
+                Resource:
+                  - !Sub 'arn:aws:iam::${AWS::AccountId}:role/${NombreProyecto}-staging-ejecucion'
+                  - !Sub 'arn:aws:iam::${AWS::AccountId}:role/${NombreProyecto}-staging-tarea'
+                Condition:
+                  StringEquals:
+                    iam:PassedToService: ecs-tasks.amazonaws.com
+
+Outputs:
+
+  ArnRolDespliegue:
+    Description: >
+      Valor de la variable AWS_ROL_DESPLIEGUE en Settings, Secrets and
+      variables, Actions, Variables del repositorio de GitHub.
+    Value: !GetAtt RolDespliegue.Arn
+
+  RepositorioAutorizado:
+    Description: Repositorio de GitHub que puede asumir el rol.
+    Value: !Ref RepositorioGitHub

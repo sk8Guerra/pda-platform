@@ -18,6 +18,10 @@ coverage/
 reports/
 *.lcov
 junit.xml
+playwright-report/
+test-results/
+blob-report/
+.playwright/
 
 # Artefactos de construccion
 dist/

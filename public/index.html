@@ -1,0 +1,207 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Perfect Dance Academy - Consola operativa</title>
+  <link rel="stylesheet" href="/estilos.css">
+  <link rel="icon" href="data:,">
+</head>
+<body>
+
+<header class="encabezado">
+  <div>
+    <h1>Perfect Dance Academy</h1>
+    <p class="subtitulo">Consola operativa de inscripcion, registro y pagos</p>
+  </div>
+  <div class="estado-sesion">
+    <span data-prueba="estado-sesion" class="etiqueta">Sin sesion</span>
+    <span data-prueba="estado-salud" class="etiqueta etiqueta-neutra">Comprobando servicio...</span>
+  </div>
+</header>
+
+<nav class="pestanias" data-prueba="navegacion">
+  <button class="pestania activa" data-panel="catalogo" data-prueba="tab-catalogo">Catalogo</button>
+  <button class="pestania" data-panel="solicitud" data-prueba="tab-solicitud">Solicitud de inscripcion</button>
+  <button class="pestania" data-panel="direccion" data-prueba="tab-direccion">Direccion</button>
+  <button class="pestania" data-panel="pagos" data-prueba="tab-pagos">Pagos</button>
+</nav>
+
+<main>
+
+  <!-- ===================================================================== -->
+  <!-- Catalogo publico (RF-010 a RF-014)                                     -->
+  <!-- ===================================================================== -->
+  <section id="panel-catalogo" class="panel visible">
+    <h2>Oferta academica</h2>
+    <p class="ayuda">
+      Consulta publica: no requiere sesion. Es la primera pantalla que ve una
+      aspirante antes de enviar su solicitud.
+    </p>
+
+    <button data-prueba="btn-cargar-catalogo" class="primario">Cargar catalogo</button>
+    <span data-prueba="origen-catalogo" class="etiqueta etiqueta-neutra"></span>
+
+    <h3>Disciplinas</h3>
+    <table data-prueba="tabla-disciplinas">
+      <thead>
+        <tr><th>Disciplina</th><th>Edades</th><th>Mensualidad</th><th>Descripcion</th></tr>
+      </thead>
+      <tbody></tbody>
+    </table>
+
+    <h3>Clases y cupo disponible</h3>
+    <table data-prueba="tabla-clases">
+      <thead>
+        <tr><th>Clase</th><th>Disciplina</th><th>Nivel</th><th>Docente</th><th>Horario</th><th>Disponibles</th></tr>
+      </thead>
+      <tbody></tbody>
+    </table>
+  </section>
+
+  <!-- ===================================================================== -->
+  <!-- Solicitud de inscripcion (RF-020)                                      -->
+  <!-- ===================================================================== -->
+  <section id="panel-solicitud" class="panel">
+    <h2>Enviar solicitud de inscripcion</h2>
+    <p class="ayuda">
+      Tramo 1 del recorrido. Lo completa la aspirante o su encargado y no
+      requiere sesion: quien solicita todavia no es usuaria de la plataforma.
+    </p>
+
+    <form data-prueba="formulario-solicitud" class="formulario" novalidate>
+      <label>Nombre de la aspirante
+        <input name="nombreAspirante" data-prueba="campo-nombre-aspirante" autocomplete="off">
+      </label>
+      <label>Fecha de nacimiento
+        <input name="fechaNacimiento" type="date" data-prueba="campo-fecha-nacimiento">
+      </label>
+      <label>Disciplina de interes
+        <select name="idDisciplina" data-prueba="campo-disciplina"></select>
+      </label>
+      <label>Nombre del encargado
+        <input name="nombreEncargado" data-prueba="campo-nombre-encargado" autocomplete="off">
+      </label>
+      <label>Correo de contacto
+        <input name="correoContacto" type="email" data-prueba="campo-correo" autocomplete="off">
+      </label>
+      <label>Telefono de contacto
+        <input name="telefonoContacto" data-prueba="campo-telefono" autocomplete="off">
+      </label>
+      <button type="submit" class="primario" data-prueba="btn-enviar-solicitud">Enviar solicitud</button>
+    </form>
+
+    <div data-prueba="resultado-solicitud" class="resultado" hidden></div>
+  </section>
+
+  <!-- ===================================================================== -->
+  <!-- Direccion: sesion y resolucion de solicitudes (RF-021, RF-022)         -->
+  <!-- ===================================================================== -->
+  <section id="panel-direccion" class="panel">
+    <h2>Direccion</h2>
+    <p class="ayuda">
+      Tramo 2 del recorrido. Requiere sesion con rol Administrador. Al aceptar
+      una solicitud se crea el expediente de la alumna, se le asigna la clase con
+      su horario y su docente, y el motor genera la mensualidad del periodo.
+    </p>
+
+    <form data-prueba="formulario-sesion" class="formulario formulario-corto" novalidate>
+      <label>Correo
+        <input name="correo" type="email" data-prueba="campo-correo-sesion" autocomplete="username">
+      </label>
+      <label>Contrasena
+        <input name="contrasena" type="password" data-prueba="campo-contrasena" autocomplete="current-password">
+      </label>
+      <button type="submit" class="primario" data-prueba="btn-iniciar-sesion">Iniciar sesion</button>
+      <button type="button" data-prueba="btn-cerrar-sesion">Cerrar sesion</button>
+    </form>
+
+    <div data-prueba="resultado-sesion" class="resultado" hidden></div>
+
+    <h3>Solicitudes recibidas</h3>
+    <button data-prueba="btn-cargar-solicitudes">Cargar solicitudes</button>
+    <table data-prueba="tabla-solicitudes">
+      <thead>
+        <tr><th>Id</th><th>Aspirante</th><th>Nacimiento</th><th>Disciplina</th><th>Estado</th></tr>
+      </thead>
+      <tbody></tbody>
+    </table>
+
+    <h3>Resolver una solicitud</h3>
+    <form data-prueba="formulario-resolucion" class="formulario" novalidate>
+      <label>Id de la solicitud
+        <input name="idSolicitud" data-prueba="campo-id-solicitud" inputmode="numeric" autocomplete="off">
+      </label>
+      <label>Clase asignada
+        <select name="idClase" data-prueba="campo-clase"></select>
+      </label>
+      <label>Nivel asignado
+        <select name="idNivel" data-prueba="campo-nivel"></select>
+      </label>
+      <label>Motivo del rechazo
+        <input name="motivo" data-prueba="campo-motivo" autocomplete="off">
+      </label>
+      <button type="submit" class="primario" data-prueba="btn-aceptar">Aceptar y registrar</button>
+      <button type="button" data-prueba="btn-rechazar">Rechazar</button>
+    </form>
+
+    <div data-prueba="resultado-resolucion" class="resultado" hidden></div>
+  </section>
+
+  <!-- ===================================================================== -->
+  <!-- Pagos (RF-030)                                                         -->
+  <!-- ===================================================================== -->
+  <section id="panel-pagos" class="panel">
+    <h2>Mensualidades y pagos</h2>
+    <p class="ayuda">
+      Requiere sesion. La plataforma nunca recibe datos de tarjeta: el cliente
+      obtiene un token de la pasarela certificada y aqui solo viaja ese token.
+    </p>
+
+    <form data-prueba="formulario-mensualidades" class="formulario formulario-corto" novalidate>
+      <label>Id de la alumna
+        <input name="idAlumna" data-prueba="campo-id-alumna" inputmode="numeric" autocomplete="off">
+      </label>
+      <button type="submit" class="primario" data-prueba="btn-cargar-mensualidades">Consultar mensualidades</button>
+    </form>
+
+    <table data-prueba="tabla-mensualidades">
+      <thead>
+        <tr><th>Id</th><th>Disciplina</th><th>Periodo</th><th>Monto</th><th>Limite</th><th>Estado</th></tr>
+      </thead>
+      <tbody></tbody>
+    </table>
+
+    <h3>Registrar un pago</h3>
+    <form data-prueba="formulario-pago" class="formulario" novalidate>
+      <label>Id de la mensualidad
+        <input name="idMensualidad" data-prueba="campo-id-mensualidad" inputmode="numeric" autocomplete="off">
+      </label>
+      <label>Medio de pago
+        <select name="medioPago" data-prueba="campo-medio-pago">
+          <option value="Tarjeta">Tarjeta</option>
+          <option value="Transferencia">Transferencia</option>
+          <option value="Efectivo">Efectivo</option>
+        </select>
+      </label>
+      <label>Token de la pasarela
+        <input name="tokenTarjeta" data-prueba="campo-token" value="tok-demo-4242" autocomplete="off">
+      </label>
+      <button type="submit" class="primario" data-prueba="btn-pagar">Pagar</button>
+    </form>
+
+    <div data-prueba="resultado-pago" class="resultado" hidden></div>
+  </section>
+
+</main>
+
+<footer>
+  <p>
+    Perfect Dance Academy &middot; San Miguel Petapa, Guatemala &middot;
+    <span data-prueba="version-plataforma">version</span>
+  </p>
+</footer>
+
+<script src="/app.js"></script>
+</body>
+</html>

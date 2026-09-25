@@ -1,0 +1,180 @@
+/* ===========================================================================
+   Consola operativa de Perfect Dance Academy.
+
+   Hoja externa y no incrustada: la politica de contenido que impone helmet
+   (Content-Security-Policy con default-src 'self') bloquea estilos y guiones
+   en linea. Mantener el estilo en este archivo es parte del cumplimiento.
+   =========================================================================== */
+
+:root {
+  --tinta: #1d1b22;
+  --tinta-suave: #5d5a68;
+  --fondo: #faf8f7;
+  --superficie: #ffffff;
+  --borde: #e4dfdc;
+  --acento: #8c2f52;
+  --acento-suave: #f5e8ed;
+  --ok: #2d6a4f;
+  --error: #9b2226;
+  --aviso: #9a6700;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  font-family: "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  font-size: 15px;
+  line-height: 1.5;
+  color: var(--tinta);
+  background: var(--fondo);
+}
+
+.encabezado {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  align-items: center;
+  justify-content: space-between;
+  padding: 18px 24px;
+  background: var(--acento);
+  color: #fff;
+}
+
+.encabezado h1 { margin: 0; font-size: 22px; letter-spacing: 0.2px; }
+.subtitulo { margin: 2px 0 0; font-size: 13px; opacity: 0.85; }
+
+.estado-sesion { display: flex; gap: 8px; flex-wrap: wrap; }
+
+.etiqueta {
+  display: inline-block;
+  padding: 3px 10px;
+  border-radius: 12px;
+  font-size: 12px;
+  background: rgba(255, 255, 255, 0.18);
+  color: #fff;
+}
+
+.etiqueta-neutra { background: rgba(255, 255, 255, 0.1); }
+
+.pestanias {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  padding: 0 16px;
+  background: var(--superficie);
+  border-bottom: 1px solid var(--borde);
+}
+
+.pestania {
+  border: 0;
+  background: transparent;
+  padding: 12px 16px;
+  font-size: 14px;
+  color: var(--tinta-suave);
+  cursor: pointer;
+  border-bottom: 3px solid transparent;
+}
+
+.pestania.activa { color: var(--acento); border-bottom-color: var(--acento); font-weight: 600; }
+
+main { max-width: 1040px; margin: 0 auto; padding: 24px 16px 48px; }
+
+.panel { display: none; }
+.panel.visible { display: block; }
+
+h2 { font-size: 19px; margin: 0 0 4px; }
+h3 { font-size: 15px; margin: 28px 0 8px; color: var(--tinta-suave); text-transform: uppercase; letter-spacing: 0.6px; }
+
+.ayuda { color: var(--tinta-suave); font-size: 13px; margin: 0 0 16px; max-width: 70ch; }
+
+.formulario {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 12px 16px;
+  align-items: end;
+  padding: 16px;
+  background: var(--superficie);
+  border: 1px solid var(--borde);
+  border-radius: 8px;
+}
+
+.formulario-corto { grid-template-columns: repeat(auto-fit, minmax(200px, 260px)); }
+
+label { display: flex; flex-direction: column; gap: 4px; font-size: 13px; color: var(--tinta-suave); }
+
+input, select {
+  padding: 8px 10px;
+  font-size: 14px;
+  font-family: inherit;
+  color: var(--tinta);
+  background: #fff;
+  border: 1px solid var(--borde);
+  border-radius: 6px;
+}
+
+input:focus, select:focus { outline: 2px solid var(--acento); outline-offset: 1px; }
+
+button {
+  padding: 9px 16px;
+  font-size: 14px;
+  font-family: inherit;
+  border: 1px solid var(--borde);
+  border-radius: 6px;
+  background: var(--superficie);
+  color: var(--tinta);
+  cursor: pointer;
+}
+
+button:hover { border-color: var(--acento); color: var(--acento); }
+
+button.primario { background: var(--acento); border-color: var(--acento); color: #fff; }
+button.primario:hover { background: #73253f; color: #fff; }
+
+table {
+  width: 100%;
+  margin-top: 8px;
+  border-collapse: collapse;
+  background: var(--superficie);
+  border: 1px solid var(--borde);
+  border-radius: 8px;
+  overflow: hidden;
+  font-size: 13px;
+}
+
+th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--borde); }
+th { background: var(--acento-suave); color: var(--acento); font-weight: 600; }
+tbody tr:last-child td { border-bottom: 0; }
+tbody:empty::after { content: ""; }
+
+.resultado {
+  margin-top: 14px;
+  padding: 12px 14px;
+  border-radius: 8px;
+  border: 1px solid var(--borde);
+  background: var(--superficie);
+  font-size: 13px;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.resultado.exito { border-left: 4px solid var(--ok); color: var(--ok); }
+.resultado.fallo { border-left: 4px solid var(--error); color: var(--error); }
+.resultado.aviso { border-left: 4px solid var(--aviso); color: var(--aviso); }
+
+/* En pantallas angostas las tablas se desplazan dentro de su propio marco, de
+   modo que la pagina nunca crece a lo ancho. Es un criterio de la revision de
+   experiencia de uso y esta cubierto por una prueba de aceptacion. */
+@media (max-width: 640px) {
+  table { display: block; overflow-x: auto; white-space: nowrap; }
+  .encabezado { flex-direction: column; align-items: flex-start; }
+  .pestanias { overflow-x: auto; }
+}
+
+footer {
+  padding: 16px 24px;
+  border-top: 1px solid var(--borde);
+  color: var(--tinta-suave);
+  font-size: 12px;
+  text-align: center;
+}

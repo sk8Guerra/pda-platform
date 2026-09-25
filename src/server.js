@@ -19,11 +19,14 @@ const { crearApp } = require('./core/app');
  */
 
 const arrancar = async () => {
-  try {
-    await cache.conectar();
-  } catch (err) {
+  // La conexion con Redis se inicia pero no se espera. La cache es opcional por
+  // diseno —si no responde, las lecturas caen a PostgreSQL— de modo que
+  // detener aqui el arranque contradice esa decision: el cliente de Redis
+  // reintenta de forma indefinida, y esperarlo dejaba el proceso vivo pero sin
+  // escuchar en su puerto, sin responder siquiera la sonda de vida.
+  cache.conectar().catch((err) => {
     logger.warn('No se pudo conectar a Redis en el arranque', { detalle: err.message });
-  }
+  });
 
   const app = crearApp(config.servicio);
 

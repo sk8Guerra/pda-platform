@@ -32,6 +32,12 @@ WORKDIR /app
 COPY --from=dependencias /app/node_modules ./node_modules
 COPY package*.json ./
 COPY src ./src
+COPY public ./public
+# El esquema y el guion de migracion viajan en la imagen para que el entorno de
+# staging pueda aplicarlos como una tarea previa al despliegue: alli no existe el
+# mecanismo de arranque de PostgreSQL que Docker Compose usa en local.
+COPY db ./db
+COPY scripts ./scripts
 
 # El proceso no corre como root: la imagen base ya provee el usuario "node".
 RUN chown -R node:node /app

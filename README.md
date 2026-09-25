@@ -146,39 +146,100 @@ pda-platform/
 │   ├── inscripcion/Dockerfile
 │   ├── pagos/Dockerfile
 │   └── gateway/nginx.conf    Enrutado por prefijo para la topologia por modulos
+├── public/                   Consola operativa: pantalla estatica servida por la aplicacion
 ├── db/init/                  Esquema y datos semilla que PostgreSQL ejecuta al crearse
+├── scripts/
+│   ├── migrar.js             Aplica el esquema y la semilla en local y en staging
+│   ├── esperar-salud.js      Espera a que un despliegue quede en verde
+│   └── url-staging.sh        Resuelve la direccion publica del entorno de staging
 ├── tests/
 │   ├── unitarias/            Reglas de negocio aisladas
-│   └── integracion/          Contrato HTTP de cada modulo
-├── docs/                     Configuracion de AWS, flujo de trabajo y plan de pruebas
-├── infra/pipeline.yml        Plantilla CloudFormation de la canalizacion
+│   ├── integracion/          Contrato HTTP de cada modulo
+│   ├── seguridad/            Superficie HTTP: cabeceras, acceso y entrada no confiable
+│   └── e2e/                  Sistema, aceptacion, seguridad y rendimiento con Playwright
+├── docs/
+│   ├── plan-de-pruebas.md    Plan completo con los veinticuatro casos
+│   ├── pipeline-cicd.md      Las cuatro etapas de la canalizacion y su evidencia
+│   ├── despliegue-staging.md Configuracion de GitHub y AWS, comandos y desmontaje
+│   ├── configuracion-aws.md  Canalizacion alternativa con CodePipeline
+│   └── flujo-de-trabajo.md   Convencion de ramas, mensajes y revision
+├── .github/workflows/
+│   ├── ci.yml                Canalizacion de cuatro etapas
+│   └── demostracion-fallo.yml  Ejecucion fallida controlada, para la evidencia
+├── infra/
+│   ├── staging.yml           Entorno de staging: red, RDS, ECS Fargate y panel
+│   ├── oidc-github.yml       Confianza entre GitHub Actions y la cuenta de AWS
+│   └── pipeline.yml          Canalizacion de AWS CodePipeline
+├── playwright.config.js      Cuatro proyectos de prueba y reporte HTML
+├── eslint.config.js          Analisis estatico
 ├── buildspec.yml             Fases de construccion para AWS CodeBuild
 └── docker-compose.yml        Entorno completo con PostgreSQL y Redis
 ```
 
 ## Pruebas
 
+La bateria esta en dos niveles. El primero no necesita infraestructura de
+ninguna clase; el segundo corre contra la plataforma desplegada de verdad.
+
 ```bash
 npm ci
-npm test            # 56 casos, sin dependencias externas
-npm run test:ci     # con reporte JUnit y cobertura
+
+# Nivel 1: 98 casos con PostgreSQL y Redis sustituidos por dobles (menos de 1 s)
+npm test
+npm run test:unitarias
+npm run test:integracion
+npm run test:seguridad
+npm run test:ci             # con reporte JUnit y cobertura, como en el servidor
+
+# Nivel 2: 45 casos contra el entorno completo levantado
+npm run entorno:arriba
+npm run salud
+npx playwright install chromium   # solo la primera vez
+npm run e2e                 # sistema, aceptacion, seguridad y rendimiento
+npm run e2e:aceptacion      # una sola suite
+
+# Reportes
+npm run reporte:e2e         # reporte HTML navegable de Playwright
+npm run reporte:cobertura   # cobertura de codigo en coverage/index.html
 ```
 
-Las pruebas no requieren PostgreSQL ni Redis: ambos se sustituyen por dobles, de
-modo que la bateria corre igual en una maquina local y en el servidor de
-construccion. El plan completo esta en `docs/plan-de-pruebas.md`.
+Antes de una ejecucion de la que se vaya a tomar evidencia, conviene devolver la
+base a su estado conocido con `npm run datos:reiniciar`.
 
-## Integracion continua
+El plan completo —objetivos, alcance, tipos de prueba, veinticuatro casos
+detallados, estrategia y parametros del sistema— esta en
+`docs/plan-de-pruebas.md`.
 
-Cada cambio en la rama principal dispara la canalizacion de AWS CodePipeline, que
-instala dependencias, ejecuta la bateria de pruebas, construye las cinco imagenes
-y las publica en Amazon ECR. Si una prueba falla, ninguna imagen se publica. Los
-indicadores de construccion se concentran en un panel de Amazon CloudWatch.
+## Consola operativa
 
-La guia paso a paso para dejarla operativa esta en `docs/configuracion-aws.md`.
-De forma complementaria, `.github/workflows/ci.yml` corre las mismas pruebas
-sobre cada solicitud de incorporacion de cambios, antes de que el codigo llegue a
-la rama principal.
+La plataforma sirve una consola en la raiz del sitio: `http://localhost:3000`.
+Desde ella se recorre el proceso completo —consultar la oferta, enviar una
+solicitud, aceptarla asignando clase y nivel, y cobrar la mensualidad— contra la
+misma API HTTP que consumiria cualquier otro cliente. Es la superficie que
+ejercitan las pruebas de aceptacion en navegador.
+
+## Integracion y entrega continua
+
+La canalizacion vive en `.github/workflows/ci.yml` y tiene cuatro etapas
+encadenadas. Cada una es una puerta: si no pasa, las siguientes no se ejecutan y
+nada llega al entorno de staging.
+
+| Etapa | Que hace |
+| --- | --- |
+| 1. Verificacion | Obtiene el codigo, instala, analisis estatico y bateria de Jest |
+| 2. Construccion | Construye las cinco imagenes, comprueba que arrancan y las publica en Amazon ECR |
+| 3. Pruebas end to end | Levanta el entorno completo y corre las cuatro suites de Playwright |
+| 4. Despliegue | Migra la base y actualiza el servicio de staging en Amazon ECS |
+
+Una solicitud de incorporacion ejecuta las etapas 1 a 3 sin publicar ni
+desplegar nada. Una fusion hacia `main` ejecuta las cuatro y deja la version
+corriendo en staging.
+
+- Detalle de las etapas y como obtener evidencia de ejecuciones exitosas y
+  fallidas: `docs/pipeline-cicd.md`
+- Configuracion de GitHub y de AWS, con todos los comandos: `docs/despliegue-staging.md`
+- Canalizacion alternativa con AWS CodePipeline, de la entrega anterior:
+  `docs/configuracion-aws.md`
 
 ## Variables de entorno
 

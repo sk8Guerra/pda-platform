@@ -34,6 +34,7 @@ WORKDIR /app
 COPY --from=dependencias /app/node_modules ./node_modules
 COPY package*.json ./
 COPY src ./src
+COPY public ./public
 
 RUN chown -R node:node /app
 USER node

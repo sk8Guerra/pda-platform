@@ -1,25 +1,62 @@
 # =============================================================================
-# Verificacion rapida en cada propuesta de cambio.
+# Perfect Dance Academy - Canalizacion de integracion y entrega continua
 #
-# La canalizacion formal de la entrega vive en AWS (CodePipeline y CodeBuild).
-# Este flujo es complementario y gratuito: corre las pruebas sobre cada rama y
-# cada solicitud de incorporacion de cambios, de modo que un error se detecta
-# antes de que la rama llegue a main y consuma minutos de construccion en AWS.
+# Cuatro etapas encadenadas. Cada una es una puerta: si no pasa, las siguientes
+# no se ejecutan y nada llega al entorno de staging.
+#
+#   1. verificacion   Obtener el codigo, instalar, analisis estatico y la
+#                     bateria de Jest (unitarias, integracion y seguridad).
+#   2. construccion   Construir las cinco imagenes de contenedor y, solo desde
+#                     main, publicarlas en Amazon ECR con la etiqueta del commit.
+#   3. pruebas-e2e    Levantar la plataforma completa con Docker Compose y correr
+#                     Playwright: sistema, aceptacion, seguridad y rendimiento.
+#   4. despliegue     Aplicar migraciones y actualizar el servicio de staging en
+#                     Amazon ECS, y comprobar con una prueba de humo que quedo
+#                     en linea.
+#
+# Las etapas 2 (publicacion) y 4 solo corren sobre la rama main. Sobre una
+# solicitud de incorporacion se construyen las imagenes pero no se publican:
+# asi una propuesta de cambio se verifica entera sin tocar ningun entorno.
+#
+# Configuracion previa en GitHub (Settings del repositorio):
+#   Variables    AWS_REGION, AWS_ROL_DESPLIEGUE, DESPLIEGUE_HABILITADO
+#   Environment  staging
+# El detalle esta en docs/despliegue-staging.md.
 # =============================================================================
 
-name: Pruebas
+name: Integracion y entrega continua
 
 on:
   push:
     branches: [main, develop]
   pull_request:
     branches: [main, develop]
+  workflow_dispatch:
+
+# Una sola ejecucion por rama: si llegan dos cambios seguidos, se cancela la
+# anterior y no se despliegan dos versiones a la vez sobre el mismo entorno.
+concurrency:
+  group: cicd-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  VERSION_NODE: '20'
+  REGION_AWS: ${{ vars.AWS_REGION || 'us-east-1' }}
+  REPOSITORIO_ECR: pda-platform
+  PILA_STAGING: ${{ vars.PILA_STAGING || 'pda-staging' }}
+
+permissions:
+  contents: read
 
 jobs:
 
-  pruebas:
-    name: Pruebas y construccion de imagenes
+  # ===========================================================================
+  # ETAPA 1 - Obtencion del codigo, construccion del proyecto y pruebas
+  # ===========================================================================
+  verificacion:
+    name: 1. Verificacion (analisis estatico y bateria de Jest)
     runs-on: ubuntu-latest
+    timeout-minutes: 10
 
     steps:
       - name: Obtener el codigo
@@ -28,33 +65,408 @@ jobs:
       - name: Preparar Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          node-version: ${{ env.VERSION_NODE }}
           cache: npm
 
       - name: Instalar dependencias
         run: npm ci
 
-      - name: Ejecutar la bateria de pruebas
+      - name: Analisis estatico
+        run: npm run lint
+
+      - name: Bateria de pruebas con reporte y cobertura
         run: npm run test:ci
 
-      - name: Publicar el reporte de pruebas
+      - name: Publicar el reporte de pruebas y la cobertura
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: reporte-pruebas
+          name: reporte-jest
           path: |
-            reports/
+            reports/junit.xml
             coverage/
-          retention-days: 7
+          retention-days: 14
 
-      - name: Verificar que las cinco imagenes construyen
+      - name: Resumen de la etapa
+        if: always()
         run: |
-          docker build -f docker/Dockerfile -t pda-platform:ci .
-          for SERVICIO in auth catalogo inscripcion pagos; do
-            docker build -f "docker/$SERVICIO/Dockerfile" -t "pda-$SERVICIO:ci" .
-          done
+          {
+            echo "### Etapa 1 - Verificacion"
+            echo ""
+            echo "| Elemento | Valor |"
+            echo "| --- | --- |"
+            echo "| Rama | \`${{ github.ref_name }}\` |"
+            echo "| Commit | \`${GITHUB_SHA:0:8}\` |"
+            echo "| Node.js | $(node --version) |"
+            if [ -f reports/junit.xml ]; then
+              TOTAL=$(grep -o 'tests="[0-9]*"' reports/junit.xml | head -1 | grep -o '[0-9]*')
+              FALLOS=$(grep -o 'failures="[0-9]*"' reports/junit.xml | head -1 | grep -o '[0-9]*')
+              echo "| Pruebas ejecutadas | ${TOTAL:-sin dato} |"
+              echo "| Pruebas fallidas | ${FALLOS:-sin dato} |"
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  # ===========================================================================
+  # ETAPA 2 - Construccion de las imagenes de contenedor
+  # ===========================================================================
+  construccion:
+    name: 2. Construccion de imagenes
+    runs-on: ubuntu-latest
+    needs: verificacion
+    timeout-minutes: 25
+
+    permissions:
+      contents: read
+      id-token: write
+
+    outputs:
+      etiqueta: ${{ steps.etiqueta.outputs.valor }}
+      publicada: ${{ steps.publicar.outputs.publicada }}
+
+    steps:
+      - name: Obtener el codigo
+        uses: actions/checkout@v4
+
+      - name: Preparar Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Calcular la etiqueta de la imagen
+        id: etiqueta
+        run: echo "valor=${GITHUB_SHA:0:8}" >> "$GITHUB_OUTPUT"
 
       - name: Validar la definicion del entorno de contenedores
         run: |
           docker compose --profile monolito config --quiet
           docker compose --profile microservicios config --quiet
+
+      - name: Construir la imagen del monolito
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: docker/Dockerfile
+          tags: pda-platform:${{ steps.etiqueta.outputs.valor }}
+          load: true
+          cache-from: type=gha,scope=monolito
+          cache-to: type=gha,mode=max,scope=monolito
+
+      - name: Construir la imagen de cada modulo
+        run: |
+          for SERVICIO in auth catalogo inscripcion pagos; do
+            echo "::group::Imagen del servicio $SERVICIO"
+            docker build -f "docker/$SERVICIO/Dockerfile" \
+              -t "pda-$SERVICIO:${{ steps.etiqueta.outputs.valor }}" .
+            echo "::endgroup::"
+          done
+
+      - name: Comprobar que la imagen arranca y responde la sonda de vida
+        run: |
+          docker run -d --name pda-humo -p 3000:3000 \
+            -e SERVICE=monolito -e NODE_ENV=production \
+            -e JWT_SECRET=secreto-solo-para-esta-comprobacion \
+            "pda-platform:${{ steps.etiqueta.outputs.valor }}"
+          for INTENTO in $(seq 1 20); do
+            if curl -fsS http://localhost:3000/health/vivo > /dev/null; then
+              echo "La imagen responde la sonda de vida."
+              docker rm -f pda-humo
+              exit 0
+            fi
+            sleep 3
+          done
+          echo "La imagen no respondio la sonda de vida."
+          docker logs pda-humo
+          docker rm -f pda-humo
+          exit 1
+
+      # --- Publicacion en Amazon ECR: unicamente desde la rama principal -----
+      - name: Autenticarse en AWS con identidad federada
+        if: github.ref == 'refs/heads/main' && vars.DESPLIEGUE_HABILITADO == 'true'
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_ROL_DESPLIEGUE }}
+          aws-region: ${{ env.REGION_AWS }}
+          role-session-name: pda-construccion-${{ github.run_id }}
+
+      - name: Iniciar sesion en Amazon ECR
+        if: github.ref == 'refs/heads/main' && vars.DESPLIEGUE_HABILITADO == 'true'
+        id: ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Publicar las cinco imagenes
+        if: github.ref == 'refs/heads/main' && vars.DESPLIEGUE_HABILITADO == 'true'
+        id: publicar
+        env:
+          REGISTRO: ${{ steps.ecr.outputs.registry }}
+          ETIQUETA: ${{ steps.etiqueta.outputs.valor }}
+        run: |
+          set -euo pipefail
+          docker tag "pda-platform:$ETIQUETA" "$REGISTRO/$REPOSITORIO_ECR:$ETIQUETA"
+          docker tag "pda-platform:$ETIQUETA" "$REGISTRO/$REPOSITORIO_ECR:latest"
+          docker push "$REGISTRO/$REPOSITORIO_ECR:$ETIQUETA"
+          docker push "$REGISTRO/$REPOSITORIO_ECR:latest"
+
+          for SERVICIO in auth catalogo inscripcion pagos; do
+            if aws ecr describe-repositories --repository-names "$REPOSITORIO_ECR-$SERVICIO" \
+                 --region "$REGION_AWS" > /dev/null 2>&1; then
+              docker tag "pda-$SERVICIO:$ETIQUETA" "$REGISTRO/$REPOSITORIO_ECR-$SERVICIO:$ETIQUETA"
+              docker push "$REGISTRO/$REPOSITORIO_ECR-$SERVICIO:$ETIQUETA"
+            else
+              echo "El repositorio $REPOSITORIO_ECR-$SERVICIO no existe en ECR; se omite."
+            fi
+          done
+
+          echo "publicada=true" >> "$GITHUB_OUTPUT"
+          echo "imagen=$REGISTRO/$REPOSITORIO_ECR:$ETIQUETA" >> "$GITHUB_OUTPUT"
+
+      - name: Resumen de la etapa
+        if: always()
+        run: |
+          {
+            echo "### Etapa 2 - Construccion"
+            echo ""
+            echo "- Etiqueta de esta version: \`${{ steps.etiqueta.outputs.valor }}\`"
+            echo "- Imagenes construidas: monolito, auth, catalogo, inscripcion, pagos"
+            if [ "${{ steps.publicar.outputs.publicada }}" = "true" ]; then
+              echo "- Publicadas en Amazon ECR: si"
+            else
+              echo "- Publicadas en Amazon ECR: no (solo se publica desde main con el despliegue habilitado)"
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  # ===========================================================================
+  # ETAPA 3 - Pruebas de sistema, aceptacion, seguridad y rendimiento
+  # ===========================================================================
+  pruebas-e2e:
+    name: 3. Pruebas end to end (Playwright)
+    runs-on: ubuntu-latest
+    needs: verificacion
+    timeout-minutes: 25
+
+    steps:
+      - name: Obtener el codigo
+        uses: actions/checkout@v4
+
+      - name: Preparar Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.VERSION_NODE }}
+          cache: npm
+
+      - name: Instalar dependencias
+        run: npm ci
+
+      - name: Instalar el navegador de pruebas
+        run: npx playwright install --with-deps chromium
+
+      - name: Levantar la plataforma completa
+        run: docker compose --profile monolito up -d --build
+
+      - name: Esperar a que la sonda de salud quede en verde
+        run: node scripts/esperar-salud.js http://localhost:3000 180
+
+      - name: Dejar la base de datos en su estado conocido
+        run: docker compose --profile monolito exec -T api node scripts/migrar.js --verificar
+
+      - name: Ejecutar las cuatro suites
+        env:
+          BASE_URL: http://localhost:3000
+        run: npm run e2e
+
+      - name: Registros de los contenedores si algo fallo
+        if: failure()
+        run: docker compose --profile monolito logs --no-color --tail 200
+
+      - name: Publicar el reporte HTML de Playwright
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: reporte-playwright
+          path: |
+            reports/playwright/
+            reports/playwright-junit.xml
+            reports/playwright-artefactos/
+          retention-days: 14
+
+      - name: Apagar el entorno
+        if: always()
+        run: docker compose --profile monolito down -v
+
+      - name: Resumen de la etapa
+        if: always()
+        run: |
+          {
+            echo "### Etapa 3 - Pruebas end to end"
+            echo ""
+            echo "Suites ejecutadas: sistema, aceptacion, seguridad y rendimiento."
+            echo ""
+            echo "El reporte HTML navegable queda como artefacto **reporte-playwright**"
+            echo "de esta ejecucion. Para verlo: descargarlo, descomprimirlo y abrir"
+            echo "\`playwright/index.html\`, o ejecutar \`npm run reporte:e2e\` en local."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  # ===========================================================================
+  # ETAPA 4 - Despliegue al entorno de staging
+  # ===========================================================================
+  despliegue-staging:
+    name: 4. Despliegue a staging
+    runs-on: ubuntu-latest
+    needs: [construccion, pruebas-e2e]
+    if: github.ref == 'refs/heads/main' && vars.DESPLIEGUE_HABILITADO == 'true'
+    timeout-minutes: 30
+
+    environment:
+      name: staging
+      url: ${{ steps.direccion.outputs.url }}
+
+    permissions:
+      contents: read
+      id-token: write
+
+    steps:
+      - name: Obtener el codigo
+        uses: actions/checkout@v4
+
+      - name: Autenticarse en AWS con identidad federada
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_ROL_DESPLIEGUE }}
+          aws-region: ${{ env.REGION_AWS }}
+          role-session-name: pda-despliegue-${{ github.run_id }}
+
+      - name: Leer los datos de la pila de staging
+        id: pila
+        run: |
+          set -euo pipefail
+          leer() {
+            aws cloudformation describe-stacks --stack-name "$PILA_STAGING" \
+              --query "Stacks[0].Outputs[?OutputKey=='$1'].OutputValue" --output text
+          }
+          {
+            echo "cluster=$(leer NombreCluster)"
+            echo "servicio=$(leer NombreServicio)"
+            echo "familia=$(leer FamiliaTarea)"
+            echo "subredes=$(leer SubredesPublicas)"
+            echo "grupo_seguridad=$(leer GrupoSeguridadServicio)"
+            echo "registro=$(leer RegistroImagenes)"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Aplicar el esquema de base de datos si hiciera falta
+        env:
+          CLUSTER: ${{ steps.pila.outputs.cluster }}
+          FAMILIA: ${{ steps.pila.outputs.familia }}
+          SUBREDES: ${{ steps.pila.outputs.subredes }}
+          GRUPO: ${{ steps.pila.outputs.grupo_seguridad }}
+        run: |
+          set -euo pipefail
+          echo "Ejecutando la migracion como tarea puntual dentro de la red privada..."
+          TAREA=$(aws ecs run-task \
+            --cluster "$CLUSTER" \
+            --task-definition "$FAMILIA" \
+            --launch-type FARGATE \
+            --network-configuration "awsvpcConfiguration={subnets=[$SUBREDES],securityGroups=[$GRUPO],assignPublicIp=ENABLED}" \
+            --overrides '{"containerOverrides":[{"name":"api","command":["node","scripts/migrar.js"]}]}' \
+            --query 'tasks[0].taskArn' --output text)
+
+          echo "Tarea de migracion: $TAREA"
+          aws ecs wait tasks-stopped --cluster "$CLUSTER" --tasks "$TAREA"
+
+          CODIGO=$(aws ecs describe-tasks --cluster "$CLUSTER" --tasks "$TAREA" \
+            --query 'tasks[0].containers[?name==`api`].exitCode' --output text)
+          RAZON=$(aws ecs describe-tasks --cluster "$CLUSTER" --tasks "$TAREA" \
+            --query 'tasks[0].stoppedReason' --output text)
+
+          echo "Codigo de salida: $CODIGO ($RAZON)"
+          if [ "$CODIGO" != "0" ]; then
+            echo "La migracion fallo. Revisar el grupo de registros /ecs/pda-staging."
+            exit 1
+          fi
+
+      - name: Preparar la nueva revision de la definicion de tarea
+        id: definicion
+        env:
+          FAMILIA: ${{ steps.pila.outputs.familia }}
+        run: |
+          set -euo pipefail
+          aws ecs describe-task-definition --task-definition "$FAMILIA" \
+            --query 'taskDefinition' --output json > tarea-actual.json
+          # register-task-definition no admite los campos que solo describe
+          # devuelve como informacion de estado.
+          jq 'del(.taskDefinitionArn, .revision, .status, .requiresAttributes,
+                  .compatibilities, .registeredAt, .registeredBy, .deregisteredAt)' \
+            tarea-actual.json > tarea-base.json
+          echo "archivo=tarea-base.json" >> "$GITHUB_OUTPUT"
+
+      - name: Fijar la imagen recien publicada
+        id: render
+        uses: aws-actions/amazon-ecs-render-task-definition@v1
+        with:
+          task-definition: ${{ steps.definicion.outputs.archivo }}
+          container-name: api
+          image: ${{ steps.pila.outputs.registro }}/pda-platform:${{ needs.construccion.outputs.etiqueta }}
+
+      - name: Actualizar el servicio y esperar a que estabilice
+        uses: aws-actions/amazon-ecs-deploy-task-definition@v2
+        with:
+          task-definition: ${{ steps.render.outputs.task-definition }}
+          service: ${{ steps.pila.outputs.servicio }}
+          cluster: ${{ steps.pila.outputs.cluster }}
+          wait-for-service-stability: true
+
+      - name: Resolver la direccion publica del entorno
+        id: direccion
+        env:
+          CLUSTER: ${{ steps.pila.outputs.cluster }}
+          SERVICIO: ${{ steps.pila.outputs.servicio }}
+        run: |
+          set -euo pipefail
+          TAREA=$(aws ecs list-tasks --cluster "$CLUSTER" --service-name "$SERVICIO" \
+            --desired-status RUNNING --query 'taskArns[0]' --output text)
+          ENI=$(aws ecs describe-tasks --cluster "$CLUSTER" --tasks "$TAREA" \
+            --query "tasks[0].attachments[0].details[?name=='networkInterfaceId'].value" --output text)
+          IP=$(aws ec2 describe-network-interfaces --network-interface-ids "$ENI" \
+            --query 'NetworkInterfaces[0].Association.PublicIp' --output text)
+          echo "url=http://$IP:3000" >> "$GITHUB_OUTPUT"
+          echo "El entorno de staging quedo en http://$IP:3000"
+
+      - name: Prueba de humo contra staging
+        run: node scripts/esperar-salud.js "${{ steps.direccion.outputs.url }}" 180
+
+      - name: Preparar Node.js para la verificacion posterior
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.VERSION_NODE }}
+          cache: npm
+
+      - name: Comprobar el recorrido principal en staging
+        env:
+          BASE_URL: ${{ steps.direccion.outputs.url }}
+        run: |
+          npm ci
+          # Solo las comprobaciones de lectura: el despliegue se valida sin
+          # alterar los datos del entorno.
+          npx playwright test --project=sistema --grep "sonda de salud|catalogo academico"
+
+      - name: Publicar el reporte de la prueba de humo
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: reporte-humo-staging
+          path: reports/playwright/
+          retention-days: 14
+
+      - name: Resumen del despliegue
+        if: always()
+        run: |
+          {
+            echo "### Etapa 4 - Despliegue a staging"
+            echo ""
+            echo "| Elemento | Valor |"
+            echo "| --- | --- |"
+            echo "| Imagen desplegada | \`pda-platform:${{ needs.construccion.outputs.etiqueta }}\` |"
+            echo "| Cluster | \`${{ steps.pila.outputs.cluster }}\` |"
+            echo "| Servicio | \`${{ steps.pila.outputs.servicio }}\` |"
+            echo "| Direccion | ${{ steps.direccion.outputs.url }} |"
+            echo ""
+            echo "La direccion cambia en cada despliegue: la tarea de Fargate recibe una"
+            echo "direccion publica nueva y el entorno no lleva balanceador, por decision"
+            echo "de costo. Para consultarla en cualquier momento: \`./scripts/url-staging.sh\`."
+          } >> "$GITHUB_STEP_SUMMARY"

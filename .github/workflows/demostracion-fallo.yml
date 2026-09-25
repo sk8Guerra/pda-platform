@@ -1,0 +1,116 @@
+# =============================================================================
+# Demostracion controlada de una ejecucion fallida
+#
+# La entrega pide evidencia de ejecuciones exitosas y fallidas. Romper una
+# prueba a proposito en una rama y confirmarla deja basura en la historia del
+# repositorio; este flujo produce la misma evidencia sin ensuciar nada: inyecta
+# un defecto en una copia efimera del arbol de trabajo del servidor, deja que la
+# canalizacion lo detecte y termina en rojo.
+#
+# Se ejecuta unicamente a mano, desde la pestania Actions del repositorio:
+#   Actions -> Demostracion de ejecucion fallida -> Run workflow
+#
+# El defecto elegido se explica solo al leer el registro, que es justo lo que
+# conviene mostrar en la defensa de la entrega.
+# =============================================================================
+
+name: Demostracion de ejecucion fallida
+
+on:
+  workflow_dispatch:
+    inputs:
+      tipo_de_fallo:
+        description: 'Que defecto inyectar'
+        required: true
+        default: regla-de-negocio
+        type: choice
+        options:
+          - regla-de-negocio
+          - contrato-http
+          - analisis-estatico
+
+permissions:
+  contents: read
+
+jobs:
+
+  fallo-controlado:
+    name: Ejecucion que debe terminar en rojo
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Obtener el codigo
+        uses: actions/checkout@v4
+
+      - name: Preparar Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+
+      - name: Instalar dependencias
+        run: npm ci
+
+      - name: Confirmar que el codigo esta sano antes de inyectar el defecto
+        run: npm run test:unitarias
+
+      - name: Inyectar el defecto
+        run: |
+          set -euo pipefail
+          case "${{ inputs.tipo_de_fallo }}" in
+
+            regla-de-negocio)
+              echo "Se invierte la comparacion del limite inferior de edad."
+              echo "La solicitud de una aspirante de 3 anios pasaria a aceptarse"
+              echo "en una disciplina cuya edad minima es 4."
+              sed -i "s/edad < disciplina.edad_minima/edad > disciplina.edad_minima/" \
+                src/modules/inscripcion/servicio.js
+              ;;
+
+            contrato-http)
+              echo "Se cambia el codigo de respuesta del recurso creado."
+              echo "La solicitud de inscripcion respondera 200 en lugar de 201."
+              sed -i "s/res.status(201).json(resultado);/res.status(200).json(resultado);/" \
+                src/modules/inscripcion/index.js
+              ;;
+
+            analisis-estatico)
+              echo "Se introduce una variable que nadie usa."
+              printf '\nconst variableSinUso = "defecto inyectado a proposito";\n' \
+                >> src/core/errores.js
+              ;;
+          esac
+
+          echo "::group::Diferencia introducida"
+          git --no-pager diff
+          echo "::endgroup::"
+
+      - name: Analisis estatico
+        run: npm run lint
+
+      - name: Bateria de pruebas con reporte
+        run: npm run test:ci
+
+      - name: Publicar el reporte de la ejecucion fallida
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: reporte-ejecucion-fallida
+          path: reports/
+          retention-days: 14
+
+      - name: Explicacion del resultado
+        if: always()
+        run: |
+          {
+            echo "### Demostracion de ejecucion fallida"
+            echo ""
+            echo "Defecto inyectado: **${{ inputs.tipo_de_fallo }}**"
+            echo ""
+            echo "Si esta ejecucion termino en rojo, la canalizacion hizo su trabajo:"
+            echo "detecto el defecto antes de construir ninguna imagen y antes de"
+            echo "tocar el entorno de staging. Ningun cambio quedo registrado en el"
+            echo "repositorio: el defecto solo existio en la copia de trabajo de este"
+            echo "servidor y desaparecio al terminar."
+          } >> "$GITHUB_STEP_SUMMARY"
