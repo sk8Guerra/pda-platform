@@ -17,3 +17,7 @@ README.md
 *.md
 .vscode
 .idea
+playwright.config.js
+eslint.config.js
+playwright-report
+test-results
