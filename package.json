@@ -14,9 +14,37 @@
     "start:inscripcion": "SERVICE=inscripcion node src/server.js",
     "start:pagos": "SERVICE=pagos node src/server.js",
     "dev": "node --watch src/server.js",
+
     "test": "jest --runInBand",
+    "test:unitarias": "jest --runInBand tests/unitarias",
+    "test:integracion": "jest --runInBand tests/integracion",
+    "test:seguridad": "jest --runInBand tests/seguridad",
     "test:ci": "jest --runInBand --ci --coverage --reporters=default --reporters=jest-junit",
-    "lint": "eslint src tests"
+    "test:todo": "npm run test:ci && npm run e2e",
+
+    "e2e": "playwright test",
+    "e2e:sistema": "playwright test --project=sistema",
+    "e2e:aceptacion": "playwright test --project=aceptacion",
+    "e2e:seguridad": "playwright test --project=seguridad",
+    "e2e:rendimiento": "playwright test --project=rendimiento",
+    "e2e:ui": "playwright test --ui",
+    "e2e:navegadores": "playwright install --with-deps chromium",
+
+    "reporte:e2e": "playwright show-report reports/playwright",
+    "reporte:cobertura": "jest --runInBand --coverage --coverageReporters=text --coverageReporters=html",
+
+    "entorno:arriba": "docker compose --profile monolito up -d --build",
+    "entorno:abajo": "docker compose --profile monolito down",
+    "entorno:limpiar": "docker compose --profile monolito down -v",
+    "entorno:microservicios": "docker compose --profile microservicios up -d --build",
+    "entorno:registros": "docker compose --profile monolito logs -f api",
+
+    "datos:migrar": "docker compose --profile monolito exec -T api node scripts/migrar.js",
+    "datos:reiniciar": "docker compose --profile monolito exec -T api node scripts/migrar.js --reiniciar",
+    "datos:verificar": "docker compose --profile monolito exec -T api node scripts/migrar.js --verificar",
+
+    "salud": "node scripts/esperar-salud.js",
+    "lint": "eslint ."
   },
   "dependencies": {
     "bcryptjs": "^2.4.3",
@@ -29,6 +57,10 @@
     "redis": "^4.6.14"
   },
   "devDependencies": {
+    "@eslint/js": "^9.11.0",
+    "@playwright/test": "^1.47.2",
+    "eslint": "^9.11.0",
+    "globals": "^15.9.0",
     "jest": "^29.7.0",
     "jest-junit": "^16.0.0",
     "supertest": "^7.0.0"
@@ -39,7 +71,9 @@
       "<rootDir>/tests/setup.js"
     ],
     "testMatch": [
-      "<rootDir>/tests/**/*.test.js"
+      "<rootDir>/tests/unitarias/**/*.test.js",
+      "<rootDir>/tests/integracion/**/*.test.js",
+      "<rootDir>/tests/seguridad/**/*.test.js"
     ],
     "collectCoverageFrom": [
       "src/**/*.js",
