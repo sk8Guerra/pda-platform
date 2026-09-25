@@ -1,0 +1,604 @@
+AWSTemplateFormatVersion: '2010-09-09'
+
+Description: >
+  Perfect Dance Academy - Entorno de staging en AWS.
+  Red propia, base de datos PostgreSQL administrada y un servicio de Amazon ECS
+  sobre Fargate que ejecuta la imagen del monolito con Redis como contenedor
+  lateral. Es el entorno al que despliega la canalizacion de GitHub Actions
+  despues de cada fusion hacia la rama principal.
+
+  Decisiones de costo, deliberadas y documentadas en la entrega:
+  no hay balanceador de carga (la tarea expone su propia direccion publica), no
+  hay NAT (las tareas viven en subredes publicas) y Redis corre junto a la
+  aplicacion en lugar de ElastiCache. El entorno completo se apaga con
+  CantidadDeseada=0 y se elimina con delete-stack.
+
+Parameters:
+
+  NombreProyecto:
+    Type: String
+    Default: pda-platform
+    Description: Prefijo aplicado a todos los recursos de esta pila.
+
+  EtiquetaImagen:
+    Type: String
+    Default: latest
+    Description: >
+      Etiqueta de la imagen de Amazon ECR con la que arranca el servicio. La
+      canalizacion la reemplaza en cada despliegue por los ocho primeros
+      caracteres del commit; este valor solo decide con que version arranca.
+
+  CantidadDeseada:
+    Type: Number
+    Default: 1
+    MinValue: 0
+    MaxValue: 2
+    Description: >
+      Tareas en ejecucion. Se pone en 0 para apagar el entorno sin eliminarlo,
+      y tambien en el primer despliegue, cuando la imagen todavia no existe en
+      el registro.
+
+  CrearRepositoriosECR:
+    Type: String
+    Default: 'si'
+    AllowedValues: ['si', 'no']
+    Description: >
+      Elegir "no" si los repositorios de imagenes ya existen, por ejemplo porque
+      se desplego antes la plantilla infra/pipeline.yml.
+
+  CidrDeAcceso:
+    Type: String
+    Default: 0.0.0.0/0
+    Description: >
+      Rango de direcciones autorizado a consultar el entorno de staging. Para
+      restringirlo a la red desde la que se presenta la entrega, indicar
+      <direccion-publica>/32.
+
+  ClaseBaseDatos:
+    Type: String
+    Default: db.t4g.micro
+    AllowedValues: [db.t4g.micro, db.t3.micro, db.t4g.small]
+    Description: Tipo de instancia de PostgreSQL. La capa gratuita cubre db.t4g.micro.
+
+  VersionPostgres:
+    Type: String
+    Default: '16.4'
+    Description: Version del motor. El esquema exige PostgreSQL 14 o superior.
+
+Conditions:
+
+  DebeCrearRepositorios: !Equals [!Ref CrearRepositoriosECR, 'si']
+
+Resources:
+
+  # ===========================================================================
+  # Red
+  # ===========================================================================
+
+  Vpc:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: 10.20.0.0/16
+      EnableDnsSupport: true
+      EnableDnsHostnames: true
+      Tags:
+        - Key: Name
+          Value: !Sub '${NombreProyecto}-staging'
+
+  PuertaDeEnlace:
+    Type: AWS::EC2::InternetGateway
+    Properties:
+      Tags:
+        - Key: Name
+          Value: !Sub '${NombreProyecto}-staging'
+
+  AnclajePuertaDeEnlace:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      VpcId: !Ref Vpc
+      InternetGatewayId: !Ref PuertaDeEnlace
+
+  SubredPublicaA:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref Vpc
+      CidrBlock: 10.20.1.0/24
+      AvailabilityZone: !Select [0, !GetAZs '']
+      MapPublicIpOnLaunch: true
+      Tags:
+        - Key: Name
+          Value: !Sub '${NombreProyecto}-staging-a'
+
+  SubredPublicaB:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref Vpc
+      CidrBlock: 10.20.2.0/24
+      AvailabilityZone: !Select [1, !GetAZs '']
+      MapPublicIpOnLaunch: true
+      Tags:
+        - Key: Name
+          Value: !Sub '${NombreProyecto}-staging-b'
+
+  TablaDeRutas:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref Vpc
+
+  RutaAInternet:
+    Type: AWS::EC2::Route
+    DependsOn: AnclajePuertaDeEnlace
+    Properties:
+      RouteTableId: !Ref TablaDeRutas
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId: !Ref PuertaDeEnlace
+
+  AsociacionRutaA:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref SubredPublicaA
+      RouteTableId: !Ref TablaDeRutas
+
+  AsociacionRutaB:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref SubredPublicaB
+      RouteTableId: !Ref TablaDeRutas
+
+  GrupoSeguridadServicio:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Acceso publico al servicio de staging.
+      VpcId: !Ref Vpc
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 3000
+          ToPort: 3000
+          CidrIp: !Ref CidrDeAcceso
+          Description: Consola operativa y API de la plataforma
+      Tags:
+        - Key: Name
+          Value: !Sub '${NombreProyecto}-staging-servicio'
+
+  GrupoSeguridadBaseDatos:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: PostgreSQL, alcanzable solo desde las tareas del servicio.
+      VpcId: !Ref Vpc
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 5432
+          ToPort: 5432
+          SourceSecurityGroupId: !Ref GrupoSeguridadServicio
+          Description: Acceso desde las tareas de ECS
+      Tags:
+        - Key: Name
+          Value: !Sub '${NombreProyecto}-staging-bd'
+
+  # ===========================================================================
+  # Secretos: ninguna credencial viaja en la plantilla ni en el repositorio
+  # ===========================================================================
+
+  SecretoBaseDatos:
+    Type: AWS::SecretsManager::Secret
+    Properties:
+      Name: !Sub '${NombreProyecto}/staging/postgres'
+      Description: Credenciales de PostgreSQL del entorno de staging.
+      GenerateSecretString:
+        SecretStringTemplate: '{"username":"pda_app"}'
+        GenerateStringKey: password
+        PasswordLength: 32
+        ExcludeCharacters: '"@/\ '
+
+  SecretoJwt:
+    Type: AWS::SecretsManager::Secret
+    Properties:
+      Name: !Sub '${NombreProyecto}/staging/jwt'
+      Description: Secreto de firma de los tokens de sesion en staging.
+      GenerateSecretString:
+        SecretStringTemplate: '{"proposito":"firma de tokens"}'
+        GenerateStringKey: secreto
+        PasswordLength: 48
+        ExcludeCharacters: '"@/\ '
+
+  # ===========================================================================
+  # Base de datos
+  # ===========================================================================
+
+  GrupoSubredesBaseDatos:
+    Type: AWS::RDS::DBSubnetGroup
+    Properties:
+      DBSubnetGroupDescription: Subredes del entorno de staging.
+      SubnetIds:
+        - !Ref SubredPublicaA
+        - !Ref SubredPublicaB
+
+  BaseDatos:
+    Type: AWS::RDS::DBInstance
+    # En un entorno de staging academico no se conserva nada al eliminar la
+    # pila: una instantanea olvidada sigue generando costo despues de la entrega.
+    DeletionPolicy: Delete
+    UpdateReplacePolicy: Delete
+    Properties:
+      DBInstanceIdentifier: !Sub '${NombreProyecto}-staging'
+      Engine: postgres
+      EngineVersion: !Ref VersionPostgres
+      DBInstanceClass: !Ref ClaseBaseDatos
+      AllocatedStorage: '20'
+      StorageType: gp2
+      StorageEncrypted: true
+      DBName: pda
+      MasterUsername: pda_app
+      MasterUserPassword: !Sub '{{resolve:secretsmanager:${SecretoBaseDatos}:SecretString:password}}'
+      DBSubnetGroupName: !Ref GrupoSubredesBaseDatos
+      VPCSecurityGroups:
+        - !Ref GrupoSeguridadBaseDatos
+      PubliclyAccessible: false
+      MultiAZ: false
+      BackupRetentionPeriod: 0
+      DeleteAutomatedBackups: true
+      DeletionProtection: false
+      EnablePerformanceInsights: false
+      AutoMinorVersionUpgrade: true
+
+  AnclajeSecretoBaseDatos:
+    Type: AWS::SecretsManager::SecretTargetAttachment
+    Properties:
+      SecretId: !Ref SecretoBaseDatos
+      TargetId: !Ref BaseDatos
+      TargetType: AWS::RDS::DBInstance
+
+  # ===========================================================================
+  # Registro de imagenes
+  # ===========================================================================
+
+  RepositorioImagenMonolito:
+    Type: AWS::ECR::Repository
+    Condition: DebeCrearRepositorios
+    DeletionPolicy: Delete
+    Properties:
+      RepositoryName: !Ref NombreProyecto
+      EmptyOnDelete: true
+      ImageScanningConfiguration:
+        ScanOnPush: true
+      LifecyclePolicy:
+        LifecyclePolicyText: |
+          {
+            "rules": [{
+              "rulePriority": 1,
+              "description": "Conservar unicamente las diez imagenes mas recientes",
+              "selection": {
+                "tagStatus": "any",
+                "countType": "imageCountMoreThan",
+                "countNumber": 10
+              },
+              "action": { "type": "expire" }
+            }]
+          }
+
+  # ===========================================================================
+  # Permisos de las tareas
+  # ===========================================================================
+
+  RolEjecucionTarea:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub '${NombreProyecto}-staging-ejecucion'
+      Description: Permite a ECS descargar la imagen, leer los secretos y escribir registros.
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ecs-tasks.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy
+      Policies:
+        - PolicyName: leer-secretos
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action: secretsmanager:GetSecretValue
+                Resource:
+                  - !Ref SecretoBaseDatos
+                  - !Ref SecretoJwt
+
+  RolTarea:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub '${NombreProyecto}-staging-tarea'
+      Description: Identidad del proceso de la aplicacion dentro de la tarea.
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ecs-tasks.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        # Habilita "aws ecs execute-command", con el que se abre una consola
+        # dentro del contenedor para diagnosticar sin exponer ningun puerto.
+        - PolicyName: consola-de-diagnostico
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - ssmmessages:CreateControlChannel
+                  - ssmmessages:CreateDataChannel
+                  - ssmmessages:OpenControlChannel
+                  - ssmmessages:OpenDataChannel
+                Resource: '*'
+
+  # ===========================================================================
+  # Servicio de contenedores
+  # ===========================================================================
+
+  GrupoRegistros:
+    Type: AWS::Logs::LogGroup
+    DeletionPolicy: Delete
+    Properties:
+      LogGroupName: !Sub '/ecs/${NombreProyecto}-staging'
+      RetentionInDays: 7
+
+  Cluster:
+    Type: AWS::ECS::Cluster
+    Properties:
+      ClusterName: !Sub '${NombreProyecto}-staging'
+      ClusterSettings:
+        # Publica RunningTaskCount y las metricas por tarea, de las que dependen
+        # el panel y la alarma de este mismo archivo. Es el unico elemento de la
+        # pila que queda fuera de la capa gratuita; se va con delete-stack.
+        - Name: containerInsights
+          Value: enabled
+
+  DefinicionTarea:
+    Type: AWS::ECS::TaskDefinition
+    Properties:
+      Family: !Sub '${NombreProyecto}-staging'
+      RequiresCompatibilities: [FARGATE]
+      NetworkMode: awsvpc
+      Cpu: '512'
+      Memory: '1024'
+      ExecutionRoleArn: !GetAtt RolEjecucionTarea.Arn
+      TaskRoleArn: !GetAtt RolTarea.Arn
+      ContainerDefinitions:
+
+        # --- Cache: contenedor lateral, alcanzable en 127.0.0.1 -------------
+        # Con NetworkMode awsvpc los dos contenedores comparten la interfaz de
+        # red de la tarea, de modo que la aplicacion llega a Redis por la
+        # direccion local sin exponerlo a la red. Evita el costo de ElastiCache,
+        # a cambio de que la cache se pierda al reemplazarse la tarea, cosa que
+        # en un entorno de staging no tiene consecuencia.
+        - Name: redis
+          Image: public.ecr.aws/docker/library/redis:7-alpine
+          Essential: true
+          Command:
+            - redis-server
+            - --save
+            - ''
+            - --appendonly
+            - 'no'
+            - --maxmemory
+            - 128mb
+            - --maxmemory-policy
+            - allkeys-lru
+          HealthCheck:
+            Command: ['CMD-SHELL', 'redis-cli ping || exit 1']
+            Interval: 15
+            Timeout: 5
+            Retries: 5
+            StartPeriod: 10
+          LogConfiguration:
+            LogDriver: awslogs
+            Options:
+              awslogs-group: !Ref GrupoRegistros
+              awslogs-region: !Ref AWS::Region
+              awslogs-stream-prefix: redis
+
+        # --- Aplicacion ------------------------------------------------------
+        - Name: api
+          Image: !Sub '${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com/${NombreProyecto}:${EtiquetaImagen}'
+          Essential: true
+          DependsOn:
+            - ContainerName: redis
+              Condition: HEALTHY
+          PortMappings:
+            - ContainerPort: 3000
+              Protocol: tcp
+          Environment:
+            - Name: SERVICE
+              Value: monolito
+            - Name: NODE_ENV
+              Value: production
+            - Name: PORT
+              Value: '3000'
+            - Name: LOG_LEVEL
+              Value: info
+            - Name: POSTGRES_HOST
+              Value: !GetAtt BaseDatos.Endpoint.Address
+            - Name: POSTGRES_PORT
+              Value: !GetAtt BaseDatos.Endpoint.Port
+            - Name: POSTGRES_DB
+              Value: pda
+            - Name: POSTGRES_USER
+              Value: pda_app
+            - Name: POSTGRES_SSL
+              Value: 'true'
+            - Name: POSTGRES_POOL_MAX
+              Value: '10'
+            - Name: REDIS_HOST
+              Value: 127.0.0.1
+            - Name: REDIS_PORT
+              Value: '6379'
+            - Name: CACHE_TTL_SEGUNDOS
+              Value: '60'
+            - Name: JWT_EXPIRACION
+              Value: 30m
+            - Name: BCRYPT_ROUNDS
+              Value: '12'
+            - Name: CORS_ORIGENES
+              Value: '*'
+          Secrets:
+            - Name: POSTGRES_PASSWORD
+              ValueFrom: !Sub '${SecretoBaseDatos}:password::'
+            - Name: JWT_SECRET
+              ValueFrom: !Sub '${SecretoJwt}:secreto::'
+          HealthCheck:
+            Command:
+              - CMD-SHELL
+              - "node -e \"fetch('http://127.0.0.1:3000/health/vivo').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))\""
+            Interval: 30
+            Timeout: 5
+            Retries: 3
+            StartPeriod: 30
+          LogConfiguration:
+            LogDriver: awslogs
+            Options:
+              awslogs-group: !Ref GrupoRegistros
+              awslogs-region: !Ref AWS::Region
+              awslogs-stream-prefix: api
+
+  Servicio:
+    Type: AWS::ECS::Service
+    DependsOn: RutaAInternet
+    Properties:
+      ServiceName: !Sub '${NombreProyecto}-staging'
+      Cluster: !Ref Cluster
+      TaskDefinition: !Ref DefinicionTarea
+      LaunchType: FARGATE
+      DesiredCount: !Ref CantidadDeseada
+      EnableExecuteCommand: true
+      # Una sola tarea y sin balanceador: se detiene la anterior antes de
+      # levantar la nueva. El entorno queda fuera de linea durante el minuto que
+      # dura el reemplazo, cosa aceptable en staging y no en produccion.
+      DeploymentConfiguration:
+        MinimumHealthyPercent: 0
+        MaximumPercent: 100
+        DeploymentCircuitBreaker:
+          Enable: true
+          Rollback: true
+      NetworkConfiguration:
+        AwsvpcConfiguration:
+          AssignPublicIp: ENABLED
+          Subnets:
+            - !Ref SubredPublicaA
+            - !Ref SubredPublicaB
+          SecurityGroups:
+            - !Ref GrupoSeguridadServicio
+
+  # ===========================================================================
+  # Observabilidad
+  # ===========================================================================
+
+  AlarmaSinTareas:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub '${NombreProyecto}-staging-sin-tareas'
+      AlarmDescription: El servicio de staging se quedo sin ninguna tarea en ejecucion.
+      Namespace: ECS/ContainerInsights
+      MetricName: RunningTaskCount
+      Dimensions:
+        - Name: ClusterName
+          Value: !Ref Cluster
+        - Name: ServiceName
+          Value: !GetAtt Servicio.Name
+      Statistic: Minimum
+      Period: 300
+      EvaluationPeriods: 2
+      Threshold: 1
+      ComparisonOperator: LessThanThreshold
+      TreatMissingData: notBreaching
+
+  Panel:
+    Type: AWS::CloudWatch::Dashboard
+    Properties:
+      DashboardName: !Sub '${NombreProyecto}-staging'
+      DashboardBody: !Sub |
+        {
+          "widgets": [
+            {
+              "type": "metric",
+              "x": 0, "y": 0, "width": 12, "height": 6,
+              "properties": {
+                "title": "Uso de procesador y memoria del servicio",
+                "region": "${AWS::Region}",
+                "stat": "Average",
+                "period": 300,
+                "view": "timeSeries",
+                "metrics": [
+                  [ "AWS/ECS", "CPUUtilization", "ClusterName", "${Cluster}", "ServiceName", "${Servicio.Name}" ],
+                  [ ".", "MemoryUtilization", ".", ".", ".", "." ]
+                ]
+              }
+            },
+            {
+              "type": "metric",
+              "x": 12, "y": 0, "width": 12, "height": 6,
+              "properties": {
+                "title": "Base de datos: conexiones y latencia de lectura",
+                "region": "${AWS::Region}",
+                "stat": "Average",
+                "period": 300,
+                "view": "timeSeries",
+                "metrics": [
+                  [ "AWS/RDS", "DatabaseConnections", "DBInstanceIdentifier", "${BaseDatos}" ],
+                  [ ".", "ReadLatency", ".", "." ]
+                ]
+              }
+            },
+            {
+              "type": "log",
+              "x": 0, "y": 6, "width": 24, "height": 6,
+              "properties": {
+                "title": "Ultimos errores de la aplicacion en staging",
+                "region": "${AWS::Region}",
+                "query": "SOURCE '/ecs/${NombreProyecto}-staging' | fields @timestamp, @message | filter @message like /(?i)(error|warn)/ | sort @timestamp desc | limit 50"
+              }
+            }
+          ]
+        }
+
+Outputs:
+
+  NombreCluster:
+    Description: Cluster de ECS que ejecuta el entorno de staging.
+    Value: !Ref Cluster
+
+  NombreServicio:
+    Description: Servicio de ECS actualizado por la canalizacion.
+    Value: !GetAtt Servicio.Name
+
+  FamiliaTarea:
+    Description: Familia de la definicion de tarea. La canalizacion registra revisiones nuevas sobre ella.
+    Value: !Sub '${NombreProyecto}-staging'
+
+  SubredesPublicas:
+    Description: Subredes donde se lanzan las tareas, separadas por coma.
+    Value: !Join [',', [!Ref SubredPublicaA, !Ref SubredPublicaB]]
+
+  GrupoSeguridadServicio:
+    Description: Grupo de seguridad de las tareas del servicio.
+    Value: !Ref GrupoSeguridadServicio
+
+  RegistroImagenes:
+    Description: Direccion del registro de imagenes de Amazon ECR.
+    Value: !Sub '${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com'
+
+  PuntoBaseDatos:
+    Description: Direccion de la instancia de PostgreSQL.
+    Value: !GetAtt BaseDatos.Endpoint.Address
+
+  SecretoBaseDatos:
+    Description: Secreto con el usuario y la contrasena de PostgreSQL.
+    Value: !Ref SecretoBaseDatos
+
+  ComandoDireccion:
+    Description: Comando que resuelve la direccion publica del entorno.
+    Value: !Sub './scripts/url-staging.sh ${AWS::StackName} ${AWS::Region}'
+
+  UrlPanel:
+    Description: Panel de CloudWatch del entorno de staging.
+    Value: !Sub 'https://${AWS::Region}.console.aws.amazon.com/cloudwatch/home?region=${AWS::Region}#dashboards:name=${NombreProyecto}-staging'
