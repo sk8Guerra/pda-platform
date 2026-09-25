@@ -184,7 +184,7 @@ ninguna clase; el segundo corre contra la plataforma desplegada de verdad.
 ```bash
 npm ci
 
-# Nivel 1: 96 casos con PostgreSQL y Redis sustituidos por dobles (menos de 1 s)
+# Nivel 1: 98 casos con PostgreSQL y Redis sustituidos por dobles (menos de 1 s)
 npm test
 npm run test:unitarias
 npm run test:integracion

@@ -85,7 +85,7 @@ El principio que gobierna todo el diseno es uno solo:
 | Aspecto | Antes de esta entrega | Despues |
 | --- | --- | --- |
 | Ejecucion de pruebas | Manual, en la maquina de cada quien | Automatica en cada propuesta de cambio y cada fusion |
-| Cantidad de pruebas | 56 casos, solo unitarias e integracion | 141 casos en seis tipos de prueba |
+| Cantidad de pruebas | 56 casos, solo unitarias e integracion | 143 casos en seis tipos de prueba |
 | Analisis estatico | Inexistente (el guion `lint` estaba declarado pero sin herramienta instalada) | ESLint 9, y es la primera puerta de la canalizacion |
 | Pruebas en navegador | Ninguna | 13 casos de aceptacion sobre una consola operativa |
 | Pruebas de seguridad | Ninguna especifica | 40 casos entre los dos niveles |
@@ -126,7 +126,7 @@ Lo que se agrego, archivo por archivo:
                   |  Obtener el codigo              |
                   |  Instalar dependencias exactas  |
                   |  Analisis estatico (ESLint)     |
-                  |  96 casos de Jest               |
+                  |  98 casos de Jest               |
                   |  Reporte JUnit + cobertura      |
                   +---------------------------------+
                         |                       |
@@ -174,7 +174,7 @@ minutos.
 | Preparar Node.js 20 con cache | `actions/setup-node@v4` | — |
 | Instalar dependencias exactas | `npm ci` | `package-lock.json` no concuerda con `package.json` |
 | Analisis estatico | `npm run lint` | Hay variables sin uso, referencias inexistentes u otros errores |
-| Bateria de pruebas | `npm run test:ci` | Cualquiera de los 96 casos falla |
+| Bateria de pruebas | `npm run test:ci` | Cualquiera de los 98 casos falla |
 | Publicar reportes | `actions/upload-artifact@v4` | — |
 
 Se usa `npm ci` y no `npm install` a proposito: instala exactamente las
@@ -251,7 +251,7 @@ mismo entorno.
 Cualquiera de estas condiciones corta la canalizacion y deja la version fuera:
 
 1. Un error de analisis estatico.
-2. Cualquiera de los 96 casos de Jest que falle.
+2. Cualquiera de los 98 casos de Jest que falle.
 3. Una imagen que no construya.
 4. Una imagen que construya pero no responda la sonda de vida.
 5. Una definicion de Docker Compose invalida.
@@ -518,16 +518,16 @@ minimo, media, percentil 95 y maximo de cada serie.
 
 | Nivel | Casos | Duracion medida | Frecuencia |
 | --- | --- | --- | --- |
-| Unitarias | 19 | incluidas en el segundo de Jest | Cada guardado, cada propuesta de cambio |
+| Unitarias | 21 | incluidas en el segundo de Jest | Cada guardado, cada propuesta de cambio |
 | Integracion | 54 | incluidas en el segundo de Jest | Cada guardado, cada propuesta de cambio |
 | Seguridad con dobles | 23 | incluidas en el segundo de Jest | Cada propuesta de cambio |
-| **Subtotal de Jest** | **96** | **1.0 s** | |
+| **Subtotal de Jest** | **98** | **1.0 s** | |
 | Sistema | 10 | 1.7 s | Cada propuesta de cambio y cada fusion |
 | Aceptacion | 13 | 6.5 s | Cada propuesta de cambio y cada fusion |
 | Seguridad end to end | 17 | 2.6 s | Cada propuesta de cambio y cada fusion |
 | Rendimiento | 5 | 1.3 s | Cada propuesta de cambio y cada fusion |
 | **Subtotal de Playwright** | **45** | **14.2 s con el arranque del navegador** | |
-| **Total automatizado** | **141** | | |
+| **Total automatizado** | **143** | | |
 | Manuales de experiencia de uso | 6 | 30 min | Una vez por entrega |
 
 La forma es deliberada: muchas pruebas baratas en la base y pocas caras en la
@@ -956,7 +956,7 @@ cambio y en cada fusion hacia la rama principal.
 
 | Etapa | Que ejecuta | Que produce |
 | --- | --- | --- |
-| 1. Verificacion | Analisis estatico y 96 casos de Jest | `reports/junit.xml`, cobertura en `coverage/` |
+| 1. Verificacion | Analisis estatico y 98 casos de Jest | `reports/junit.xml`, cobertura en `coverage/` |
 | 2. Construccion | Cinco imagenes y prueba de humo de la imagen | Imagenes publicadas en Amazon ECR |
 | 3. Pruebas end to end | 45 casos de Playwright sobre el entorno completo | Reporte HTML navegable y `reports/playwright-junit.xml` |
 | 4. Despliegue | Migracion y actualizacion del servicio en staging | Prueba de humo contra la direccion publica |
@@ -969,7 +969,7 @@ infraestructura: corren en cualquier maquina con Node.js 20.
 ```bash
 npm ci
 npm run lint                  # analisis estatico
-npm test                      # los 96 casos
+npm test                      # los 98 casos
 npm run test:unitarias        # solo el nivel unitario
 npm run test:integracion      # solo el contrato HTTP de los modulos
 npm run test:seguridad        # solo la superficie de seguridad
@@ -1034,9 +1034,9 @@ ejecucion, con catorce dias de retencion.
 
 | Bateria | Casos | Aprobados | Fallidos | Omitidos | Duracion |
 | --- | --- | --- | --- | --- | --- |
-| Jest (unitarias, integracion, seguridad) | 96 | 96 | 0 | 0 | 1.0 s |
+| Jest (unitarias, integracion, seguridad) | 98 | 98 | 0 | 0 | 1.0 s |
 | Playwright (sistema, aceptacion, seguridad, rendimiento) | 45 | 45 | 0 | 0 | 14.2 s |
-| **Total** | **141** | **141** | **0** | **0** | **15.2 s** |
+| **Total** | **143** | **143** | **0** | **0** | **15.2 s** |
 
 Analisis estatico: sin errores ni advertencias.
 
@@ -1107,7 +1107,7 @@ registre errores.
 
 | Metrica | Meta | Medido |
 | --- | --- | --- |
-| Casos automatizados que pasan | 100 % | 141 de 141 |
+| Casos automatizados que pasan | 100 % | 143 de 143 |
 | Defectos criticos o altos abiertos | 0 | 0 |
 | Duracion de la bateria de Jest | menos de 10 s | 1.0 s |
 | Duracion de la bateria completa en local | menos de 60 s | 15.2 s |

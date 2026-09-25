@@ -232,10 +232,10 @@ Ubicacion: `tests/e2e/rendimiento-catalogo.spec.js`, proyecto `rendimiento`.
 
 | Nivel | Casos | Duracion medida | Frecuencia |
 | --- | --- | --- | --- |
-| Unitarias | 19 | incluidas en el segundo de Jest | Cada guardado, cada propuesta de cambio |
+| Unitarias | 21 | incluidas en el segundo de Jest | Cada guardado, cada propuesta de cambio |
 | Integracion | 54 | incluidas en el segundo de Jest | Cada guardado, cada propuesta de cambio |
 | Seguridad con dobles | 23 | incluidas en el segundo de Jest | Cada propuesta de cambio |
-| **Subtotal de Jest** | **96** | **1.0 s** | |
+| **Subtotal de Jest** | **98** | **1.0 s** | |
 | Sistema | 10 | 1.7 s | Cada propuesta de cambio y cada fusion |
 | Aceptacion | 13 | 6.5 s | Cada propuesta de cambio y cada fusion |
 | Seguridad end to end | 17 | 2.6 s | Cada propuesta de cambio y cada fusion |
@@ -345,7 +345,7 @@ incidencia que se abrio.
 | Motor de contenedores | Docker 29.4.0 sobre OrbStack |
 | Base de datos | PostgreSQL 16 en contenedor, reiniciada con `npm run datos:reiniciar` |
 | Navegador | Chromium 153.0.8010.12, empaquetado con Playwright 1.63.0 |
-| Resultado de Jest | 96 casos, 9 suites, 96 aprobados, 0 fallidos, 1.0 s |
+| Resultado de Jest | 98 casos, 9 suites, 96 aprobados, 0 fallidos, 1.0 s |
 | Resultado de Playwright | 45 casos, 4 proyectos, 45 aprobados, 0 fallidos, 14.2 s |
 
 La bateria se ejecuto dos veces consecutivas sin reiniciar los datos entre una y
