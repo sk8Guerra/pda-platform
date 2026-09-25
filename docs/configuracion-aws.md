@@ -1,4 +1,13 @@
-# Configuracion de la canalizacion en AWS
+# Configuracion de la canalizacion en AWS (CodePipeline)
+
+> **Cual de las dos guias seguir.** La canalizacion en uso es la de GitHub
+> Actions, que ademas de construir y probar despliega a staging: su guia es
+> `docs/despliegue-staging.md` y conviene seguir esa. Este documento describe la
+> canalizacion equivalente con servicios nativos de AWS, elaborada en la entrega
+> anterior, y se conserva como alternativa documentada.
+>
+> No conviene tener las dos activas contra la misma rama: ambas publicarian
+> sobre el mismo registro de imagenes.
 
 Esta guia deja operativa la canalizacion de integracion continua descrita en la
 plantilla `infra/pipeline.yml`. El recorrido completo toma entre veinte y treinta
