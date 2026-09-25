@@ -20,7 +20,14 @@ let disponible = false;
 const conectar = async () => {
   if (cliente) return cliente;
   cliente = createClient({
-    socket: { host: config.redis.host, port: config.redis.port },
+    socket: {
+      host: config.redis.host,
+      port: config.redis.port,
+      // Reintento con espera creciente hasta cinco segundos. Sin un limite
+      // explicito, el cliente reintenta varias veces por segundo y cada intento
+      // deja un renglon en la bitacora: un Redis caido inundaba el registro.
+      reconnectStrategy: (intentos) => Math.min(intentos * 250, 5000),
+    },
     password: config.redis.password,
   });
   cliente.on('error', (err) => {
