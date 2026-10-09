@@ -28,9 +28,123 @@ test.describe('HU-013 consultar la oferta academica sin registrarse', () => {
     await expect(primeraClase.locator('td').nth(4)).toContainText(':');
   });
 
-  test('la consulta se resuelve desde la cache al repetirse', async ({ page }) => {
-    await page.getByTestId('btn-cargar-catalogo').click();
-    await expect(page.getByTestId('origen-catalogo')).toContainText('cache');
+});
+
+test.describe('HU-013 pasar del catalogo a la solicitud', () => {
+
+  test('la accion de cada clase concuerda con su cupo disponible', async ({ page }) => {
+    const filas = page.getByTestId('tabla-clases').locator('tbody tr');
+    await expect(filas).not.toHaveCount(0);
+
+    // Se comprueba la regla, no un dato concreto: el entorno acumula
+    // inscripciones entre ejecuciones y el cupo de cada clase cambia.
+    const total = await filas.count();
+    for (let i = 0; i < total; i += 1) {
+      const fila = filas.nth(i);
+      const disponibles = Number(await fila.locator('td').nth(5).innerText());
+      const accion = fila.getByTestId('btn-inscribirse');
+      if (disponibles > 0) {
+        await expect(accion).toBeEnabled();
+        await expect(accion).toHaveText('Inscribirse');
+      } else {
+        await expect(accion).toBeDisabled();
+        await expect(accion).toHaveText('Sin cupo');
+      }
+    }
+  });
+
+  test('inscribirse lleva a la solicitud con la disciplina de la clase elegida', async ({ page }) => {
+    const fila = page.getByTestId('tabla-clases').locator('tbody tr')
+      .filter({ has: page.locator('[data-prueba="btn-inscribirse"]:not([disabled])') })
+      .first();
+
+    const disciplina = (await fila.locator('td').nth(1).innerText()).trim();
+    await fila.getByTestId('btn-inscribirse').click();
+
+    await expect(page.locator('#panel-solicitud')).toBeVisible();
+    const elegida = await page.getByTestId('campo-disciplina')
+      .locator('option:checked').innerText();
+    expect(elegida.trim()).toBe(disciplina);
+  });
+});
+
+test.describe('HU-002 el navbar refleja el estado de la sesion', () => {
+
+  test('sin sesion solo se ofrecen las pantallas publicas', async ({ page }) => {
+    await expect(page.getByTestId('tab-catalogo')).toBeVisible();
+    await expect(page.getByTestId('tab-solicitud')).toBeVisible();
+    await expect(page.getByTestId('tab-direccion')).toBeHidden();
+    await expect(page.getByTestId('tab-pagos')).toBeHidden();
+    await expect(page.getByTestId('btn-abrir-sesion')).toBeVisible();
+    await expect(page.getByTestId('btn-cerrar-sesion')).toBeHidden();
+  });
+
+  test('iniciar sesion descubre Direccion y Pagos, y cerrarla las vuelve a ocultar', async ({ page }) => {
+    await page.getByTestId('btn-abrir-sesion').click();
+    await page.getByTestId('campo-correo-sesion').fill(apoyo.CREDENCIALES.administrador.correo);
+    await page.getByTestId('campo-contrasena').fill(apoyo.CREDENCIALES.administrador.contrasena);
+    await page.getByTestId('btn-iniciar-sesion').click();
+
+    await expect(page.getByTestId('tab-direccion')).toBeVisible();
+    await expect(page.getByTestId('tab-pagos')).toBeVisible();
+    await expect(page.getByTestId('btn-cerrar-sesion')).toBeVisible();
+    await expect(page.getByTestId('btn-abrir-sesion')).toBeHidden();
+    // Quien entra aterriza en Direccion, que es a lo que viene.
+    await expect(page.locator('#panel-direccion')).toBeVisible();
+
+    await page.getByTestId('btn-cerrar-sesion').click();
+    await expect(page.getByTestId('tab-direccion')).toBeHidden();
+    await expect(page.getByTestId('tab-pagos')).toBeHidden();
+    await expect(page.getByTestId('btn-abrir-sesion')).toBeVisible();
+    await expect(page.getByTestId('estado-sesion')).toHaveText('Sin sesion');
+    await expect(page.locator('#panel-catalogo')).toBeVisible();
+  });
+});
+
+test.describe('HU-002 la sesion sobrevive a la recarga', () => {
+
+  const entrar = async (page) => {
+    await page.getByTestId('btn-abrir-sesion').click();
+    await page.getByTestId('campo-correo-sesion').fill(apoyo.CREDENCIALES.administrador.correo);
+    await page.getByTestId('campo-contrasena').fill(apoyo.CREDENCIALES.administrador.contrasena);
+    await page.getByTestId('btn-iniciar-sesion').click();
+    await expect(page.getByTestId('estado-sesion')).toContainText('Administrador');
+  };
+
+  test('recargar la pantalla conserva la sesion y las pantallas que habilita', async ({ page }) => {
+    await entrar(page);
+    await page.reload();
+
+    await expect(page.getByTestId('estado-sesion')).toContainText('Administrador');
+    await expect(page.getByTestId('tab-direccion')).toBeVisible();
+    await expect(page.getByTestId('tab-pagos')).toBeVisible();
+    await expect(page.getByTestId('btn-cerrar-sesion')).toBeVisible();
+  });
+
+  test('cerrar sesion no deja nada guardado que la recarga pueda resucitar', async ({ page }) => {
+    await entrar(page);
+    await page.getByTestId('btn-cerrar-sesion').click();
+    await page.reload();
+
+    await expect(page.getByTestId('estado-sesion')).toHaveText('Sin sesion');
+    await expect(page.getByTestId('tab-direccion')).toBeHidden();
+    await expect(page.getByTestId('btn-abrir-sesion')).toBeVisible();
+  });
+
+  test('un token guardado que ya no sirve no abre la consola', async ({ page }) => {
+    await entrar(page);
+
+    // Se adultera el token guardado para reproducir lo que pasa cuando vence:
+    // al arrancar, la consola lo comprueba contra la API y lo descarta.
+    await page.evaluate(() => {
+      const guardada = JSON.parse(sessionStorage.getItem('pda.sesion'));
+      guardada.token = `${guardada.token}-ya-no-sirve`;
+      sessionStorage.setItem('pda.sesion', JSON.stringify(guardada));
+    });
+    await page.reload();
+
+    await expect(page.getByTestId('estado-sesion')).toHaveText('Sin sesion');
+    await expect(page.getByTestId('tab-direccion')).toBeHidden();
   });
 });
 
@@ -83,7 +197,7 @@ test.describe('HU-014 enviar una solicitud de inscripcion', () => {
 test.describe('HU-002 control de acceso desde la consola', () => {
 
   test('las credenciales correctas muestran el nombre y el rol de quien entra', async ({ page }) => {
-    await page.getByTestId('tab-direccion').click();
+    await page.getByTestId('btn-abrir-sesion').click();
     await page.getByTestId('campo-correo-sesion').fill(apoyo.CREDENCIALES.administrador.correo);
     await page.getByTestId('campo-contrasena').fill(apoyo.CREDENCIALES.administrador.contrasena);
     await page.getByTestId('btn-iniciar-sesion').click();
@@ -93,7 +207,7 @@ test.describe('HU-002 control de acceso desde la consola', () => {
   });
 
   test('una contrasena incorrecta no abre sesion ni revela si el correo existe', async ({ page }) => {
-    await page.getByTestId('tab-direccion').click();
+    await page.getByTestId('btn-abrir-sesion').click();
     await page.getByTestId('campo-correo-sesion').fill(apoyo.CREDENCIALES.administrador.correo);
     await page.getByTestId('campo-contrasena').fill('contrasena-equivocada');
     await page.getByTestId('btn-iniciar-sesion').click();
@@ -104,7 +218,7 @@ test.describe('HU-002 control de acceso desde la consola', () => {
   });
 
   test('el rol Docente no puede resolver solicitudes', async ({ page }) => {
-    await page.getByTestId('tab-direccion').click();
+    await page.getByTestId('btn-abrir-sesion').click();
     await page.getByTestId('campo-correo-sesion').fill(apoyo.CREDENCIALES.docente.correo);
     await page.getByTestId('campo-contrasena').fill(apoyo.CREDENCIALES.docente.contrasena);
     await page.getByTestId('btn-iniciar-sesion').click();
@@ -134,7 +248,7 @@ test.describe('HU-015 y HU-021 recorrido completo de la direccion', () => {
     await expect(page.getByTestId('resultado-solicitud')).toHaveClass(/exito/);
 
     // --- La direccion entra y la encuentra en su bandeja ---------------------
-    await page.getByTestId('tab-direccion').click();
+    await page.getByTestId('btn-abrir-sesion').click();
     await page.getByTestId('campo-correo-sesion').fill(apoyo.CREDENCIALES.administrador.correo);
     await page.getByTestId('campo-contrasena').fill(apoyo.CREDENCIALES.administrador.contrasena);
     await page.getByTestId('btn-iniciar-sesion').click();
@@ -143,7 +257,6 @@ test.describe('HU-015 y HU-021 recorrido completo de la direccion', () => {
     const idSolicitud = await page.getByTestId('campo-id-solicitud').inputValue();
     expect(Number(idSolicitud)).toBeGreaterThan(0);
 
-    await page.getByTestId('btn-cargar-solicitudes').click();
     await expect(
       page.getByTestId('tabla-solicitudes').locator(`tbody tr[data-fila="${idSolicitud}"]`)
     ).toContainText(`Valeria Prueba ${sufijo}`);
@@ -177,7 +290,6 @@ test.describe('HU-015 y HU-021 recorrido completo de la direccion', () => {
     const idAlumna = await page.getByTestId('campo-id-alumna').inputValue();
     expect(Number(idAlumna)).toBeGreaterThan(0);
 
-    await page.getByTestId('btn-cargar-mensualidades').click();
     const filas = page.getByTestId('tabla-mensualidades').locator('tbody tr');
     await expect(filas).toHaveCount(1);
     await expect(filas.first()).toContainText('Pendiente');
@@ -194,7 +306,6 @@ test.describe('HU-015 y HU-021 recorrido completo de la direccion', () => {
     await expect(pago).toContainText('Pagada');
 
     // --- Y la mensualidad ya no aparece pendiente ----------------------------
-    await page.getByTestId('btn-cargar-mensualidades').click();
     await expect(filas.first()).toContainText('Pagada');
   });
 
@@ -204,7 +315,7 @@ test.describe('HU-015 y HU-021 recorrido completo de la direccion', () => {
     // orden de ejecucion.
     const { idAlumna, mensualidad } = await apoyo.registrarAlumna(request);
 
-    await page.getByTestId('tab-direccion').click();
+    await page.getByTestId('btn-abrir-sesion').click();
     await page.getByTestId('campo-correo-sesion').fill(apoyo.CREDENCIALES.administrador.correo);
     await page.getByTestId('campo-contrasena').fill(apoyo.CREDENCIALES.administrador.contrasena);
     await page.getByTestId('btn-iniciar-sesion').click();
@@ -212,7 +323,6 @@ test.describe('HU-015 y HU-021 recorrido completo de la direccion', () => {
 
     await page.getByTestId('tab-pagos').click();
     await page.getByTestId('campo-id-alumna').fill(String(idAlumna));
-    await page.getByTestId('btn-cargar-mensualidades').click();
 
     // Se espera a que la tabla se pueble: contar antes de que llegue la
     // respuesta daria cero y la prueba se saltaria sin haber comprobado nada.
@@ -231,6 +341,47 @@ test.describe('HU-015 y HU-021 recorrido completo de la direccion', () => {
     await page.getByTestId('btn-pagar').click();
     await expect(page.getByTestId('resultado-pago')).toHaveClass(/fallo/);
     await expect(page.getByTestId('resultado-pago')).toContainText('ya fue saldada');
+  });
+});
+
+test.describe('HU-030 las pantallas traen sus datos solas', () => {
+
+  const entrar = async (page) => {
+    await page.getByTestId('btn-abrir-sesion').click();
+    await page.getByTestId('campo-correo-sesion').fill(apoyo.CREDENCIALES.administrador.correo);
+    await page.getByTestId('campo-contrasena').fill(apoyo.CREDENCIALES.administrador.contrasena);
+    await page.getByTestId('btn-iniciar-sesion').click();
+    await expect(page.getByTestId('estado-sesion')).toContainText('Administrador');
+  };
+
+  test('Direccion muestra la bandeja de solicitudes sin pedirla', async ({ page, request }) => {
+    const { disciplinas } = await apoyo.catalogo(request);
+    const { cuerpo } = await apoyo.crearSolicitud(request, {
+      idDisciplina: disciplinas[0].id_disciplina,
+      edad: Math.max(disciplinas[0].edad_minima ?? 6, 6),
+    });
+
+    await entrar(page);
+
+    // Iniciar sesion desemboca en Direccion: la bandeja ya debe estar poblada.
+    await expect(
+      page.getByTestId('tabla-solicitudes').locator(`tbody tr[data-fila="${cuerpo.solicitud.id_solicitud}"]`)
+    ).toContainText(cuerpo.solicitud.nombre_aspirante);
+  });
+
+  test('Pagos lista las alumnas registradas y cobra desde la propia tabla', async ({ page, request }) => {
+    const { idAlumna } = await apoyo.registrarAlumna(request);
+
+    await entrar(page);
+    await page.getByTestId('tab-pagos').click();
+
+    const fila = page.getByTestId('tabla-alumnas').locator(`tbody tr[data-fila="${idAlumna}"]`);
+    await expect(fila).toContainText(String(idAlumna));
+
+    await fila.getByTestId('btn-ver-mensualidades').click();
+    const mensualidades = page.getByTestId('tabla-mensualidades').locator('tbody tr');
+    await expect(mensualidades).toHaveCount(1);
+    await expect(mensualidades.first()).toContainText('Pendiente');
   });
 });
 
@@ -262,8 +413,7 @@ test.describe('experiencia de uso comprobable de forma automatica', () => {
     page.on('pageerror', (err) => errores.push(err.message));
 
     await page.goto('/');
-    await page.getByTestId('btn-cargar-catalogo').click();
-    await expect(page.getByTestId('origen-catalogo')).not.toHaveText('');
+    await expect(page.getByTestId('tabla-clases').locator('tbody tr')).not.toHaveCount(0);
 
     expect(errores).toEqual([]);
   });

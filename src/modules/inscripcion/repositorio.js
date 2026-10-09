@@ -53,6 +53,29 @@ const listarSolicitudes = async (estado = null) => {
   return rows;
 };
 
+/**
+ * Alumnas ya registradas, con la disciplina y el nivel en que quedaron y la
+ * clase que tienen reservada. Es la lista que la consola necesita para cobrar
+ * sin tener que pedir el identificador de memoria (RF-030).
+ */
+const listarAlumnas = async () => {
+  const { rows } = await db.consultar(
+    `SELECT a.id_alumna, a.nombre_completo, a.fecha_nacimiento, a.estado,
+            a.fecha_registro,
+            d.nombre AS disciplina, n.nombre_nivel AS nivel,
+            c.id_clase, c.dia_semana, c.hora_inicio, c.hora_fin
+       FROM alumna a
+       LEFT JOIN alumna_disciplina ad ON ad.id_alumna = a.id_alumna
+       LEFT JOIN disciplina d ON d.id_disciplina = ad.id_disciplina
+       LEFT JOIN nivel n ON n.id_nivel = ad.id_nivel
+       LEFT JOIN reserva_cupo r ON r.id_alumna = a.id_alumna
+                               AND r.estado = 'Confirmada'
+       LEFT JOIN clase c ON c.id_clase = r.id_clase
+      ORDER BY a.fecha_registro DESC, a.id_alumna DESC`
+  );
+  return rows;
+};
+
 const cupoConfirmado = (cliente, idClase) =>
   cliente.query(
     `SELECT c.cupo_maximo,
@@ -128,6 +151,7 @@ module.exports = {
   crearSolicitud,
   buscarSolicitud,
   listarSolicitudes,
+  listarAlumnas,
   cupoConfirmado,
   datosDeClase,
   crearAlumna,
