@@ -32,7 +32,22 @@ const crearApp = (servicio = config.servicio) => {
   const app = express();
 
   app.disable('x-powered-by');
-  app.use(helmet());
+  // Content-Security-Policy mantiene su valor por defecto, menos dos cosas
+  // que solo tienen sentido detras de TLS. El entorno de staging publica la
+  // tarea de Fargate directamente, sin balanceador ni certificado (decision de
+  // costo documentada en infra/staging.yml): sin esto, "upgrade-insecure-
+  // -requests" hace que el navegador reescriba cada pedido de /estilos.css y
+  // /app.js a https://, donde no hay nada escuchando, y la pagina carga sin
+  // estilo ni guion. HSTS tiene el mismo problema de fondo y ademas el
+  // navegador lo ignora si no llega por HTTPS, asi que tampoco aporta nada
+  // aqui.
+  app.use(helmet({
+    contentSecurityPolicy: {
+      useDefaults: true,
+      directives: { 'upgrade-insecure-requests': null },
+    },
+    hsts: false,
+  }));
   app.use(cors({ origin: config.seguridad.corsOrigenes }));
   app.use(express.json({ limit: '1mb' }));
 
