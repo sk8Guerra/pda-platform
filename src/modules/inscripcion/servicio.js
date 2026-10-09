@@ -80,6 +80,8 @@ const obtenerSolicitud = async (idSolicitud) => {
 
 const listarSolicitudes = (estado) => repositorio.listarSolicitudes(estado);
 
+const listarAlumnas = () => repositorio.listarAlumnas();
+
 /**
  * Acepta la solicitud y ejecuta el registro. Antes de abrir la transaccion se
  * toma un bloqueo en Redis sobre la clase, para que dos aceptaciones simultaneas
@@ -192,6 +194,7 @@ module.exports = {
   crearSolicitud,
   obtenerSolicitud,
   listarSolicitudes,
+  listarAlumnas,
   aceptarSolicitud,
   rechazarSolicitud,
   calcularEdad,

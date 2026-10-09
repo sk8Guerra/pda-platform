@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Perfect Dance Academy - Consola operativa</title>
   <link rel="stylesheet" href="/estilos.css">
-  <link rel="icon" href="data:,">
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Ccircle cx='13' cy='16' r='11' fill='%231aa6bd'/%3E%3Ccircle cx='21' cy='16' r='11' fill='%23f2872e' fill-opacity='0.85'/%3E%3C/svg%3E">
 </head>
 <body>
 
@@ -16,15 +16,26 @@
   </div>
   <div class="estado-sesion">
     <span data-prueba="estado-sesion" class="etiqueta">Sin sesion</span>
-    <span data-prueba="estado-salud" class="etiqueta etiqueta-neutra">Comprobando servicio...</span>
+    <!-- Oculta a la vista: la lectura "servicio X en linea" es ruido tecnico
+         para quien usa la consola. Sigue en el DOM porque las pruebas de
+         aceptacion esperan a que diga "en linea" antes de empezar cada caso. -->
+    <span data-prueba="estado-salud" class="etiqueta etiqueta-neutra visualmente-oculto">Comprobando servicio...</span>
   </div>
 </header>
 
+<!-- Direccion y Pagos solo existen para quien tiene sesion: una visitante que
+     entra a consultar la oferta no deberia ver pantallas que no puede usar. El
+     guion las descubre al iniciar sesion y las vuelve a ocultar al cerrarla. -->
 <nav class="pestanias" data-prueba="navegacion">
   <button class="pestania activa" data-panel="catalogo" data-prueba="tab-catalogo">Catalogo</button>
   <button class="pestania" data-panel="solicitud" data-prueba="tab-solicitud">Solicitud de inscripcion</button>
-  <button class="pestania" data-panel="direccion" data-prueba="tab-direccion">Direccion</button>
-  <button class="pestania" data-panel="pagos" data-prueba="tab-pagos">Pagos</button>
+  <button class="pestania" data-panel="direccion" data-prueba="tab-direccion" hidden>Direccion</button>
+  <button class="pestania" data-panel="pagos" data-prueba="tab-pagos" hidden>Pagos</button>
+
+  <div class="acciones-sesion">
+    <button class="boton-sesion" data-prueba="btn-abrir-sesion">Iniciar sesion</button>
+    <button class="boton-sesion" data-prueba="btn-cerrar-sesion" hidden>Cerrar sesion</button>
+  </div>
 </nav>
 
 <main>
@@ -34,13 +45,6 @@
   <!-- ===================================================================== -->
   <section id="panel-catalogo" class="panel visible">
     <h2>Oferta academica</h2>
-    <p class="ayuda">
-      Consulta publica: no requiere sesion. Es la primera pantalla que ve una
-      aspirante antes de enviar su solicitud.
-    </p>
-
-    <button data-prueba="btn-cargar-catalogo" class="primario">Cargar catalogo</button>
-    <span data-prueba="origen-catalogo" class="etiqueta etiqueta-neutra"></span>
 
     <h3>Disciplinas</h3>
     <table data-prueba="tabla-disciplinas">
@@ -53,7 +57,7 @@
     <h3>Clases y cupo disponible</h3>
     <table data-prueba="tabla-clases">
       <thead>
-        <tr><th>Clase</th><th>Disciplina</th><th>Nivel</th><th>Docente</th><th>Horario</th><th>Disponibles</th></tr>
+        <tr><th>Clase</th><th>Disciplina</th><th>Nivel</th><th>Docente</th><th>Horario</th><th>Disponibles</th><th>Accion</th></tr>
       </thead>
       <tbody></tbody>
     </table>
@@ -64,10 +68,6 @@
   <!-- ===================================================================== -->
   <section id="panel-solicitud" class="panel">
     <h2>Enviar solicitud de inscripcion</h2>
-    <p class="ayuda">
-      Tramo 1 del recorrido. Lo completa la aspirante o su encargado y no
-      requiere sesion: quien solicita todavia no es usuaria de la plataforma.
-    </p>
 
     <form data-prueba="formulario-solicitud" class="formulario" novalidate>
       <label>Nombre de la aspirante
@@ -95,14 +95,17 @@
   </section>
 
   <!-- ===================================================================== -->
-  <!-- Direccion: sesion y resolucion de solicitudes (RF-021, RF-022)         -->
+  <!-- Inicio de sesion (RF-001, RF-002)                                      -->
+  <!--                                                                        -->
+  <!-- Vive en su propio panel y no dentro de Direccion: esa pantalla esta     -->
+  <!-- oculta mientras no haya sesion, de modo que el formulario que abre la   -->
+  <!-- sesion no puede estar dentro de ella. Se llega por el navbar.           -->
   <!-- ===================================================================== -->
-  <section id="panel-direccion" class="panel">
-    <h2>Direccion</h2>
+  <section id="panel-sesion" class="panel">
+    <h2>Iniciar sesion</h2>
     <p class="ayuda">
-      Tramo 2 del recorrido. Requiere sesion con rol Administrador. Al aceptar
-      una solicitud se crea el expediente de la alumna, se le asigna la clase con
-      su horario y su docente, y el motor genera la mensualidad del periodo.
+      Reservado al personal de la academia. Con la sesion abierta se habilitan
+      las pantallas de Direccion y de Pagos.
     </p>
 
     <form data-prueba="formulario-sesion" class="formulario formulario-corto" novalidate>
@@ -113,13 +116,18 @@
         <input name="contrasena" type="password" data-prueba="campo-contrasena" autocomplete="current-password">
       </label>
       <button type="submit" class="primario" data-prueba="btn-iniciar-sesion">Iniciar sesion</button>
-      <button type="button" data-prueba="btn-cerrar-sesion">Cerrar sesion</button>
     </form>
 
     <div data-prueba="resultado-sesion" class="resultado" hidden></div>
+  </section>
+
+  <!-- ===================================================================== -->
+  <!-- Direccion: sesion y resolucion de solicitudes (RF-021, RF-022)         -->
+  <!-- ===================================================================== -->
+  <section id="panel-direccion" class="panel">
+    <h2>Direccion</h2>
 
     <h3>Solicitudes recibidas</h3>
-    <button data-prueba="btn-cargar-solicitudes">Cargar solicitudes</button>
     <table data-prueba="tabla-solicitudes">
       <thead>
         <tr><th>Id</th><th>Aspirante</th><th>Nacimiento</th><th>Disciplina</th><th>Estado</th></tr>
@@ -158,11 +166,22 @@
       obtiene un token de la pasarela certificada y aqui solo viaja ese token.
     </p>
 
+    <h3>Alumnas registradas</h3>
+    <table data-prueba="tabla-alumnas">
+      <thead>
+        <tr><th>Id</th><th>Alumna</th><th>Disciplina</th><th>Nivel</th><th>Horario</th><th>Estado</th><th>Accion</th></tr>
+      </thead>
+      <tbody></tbody>
+    </table>
+
+    <h3>Mensualidades</h3>
+    <!-- El identificador se llena solo al elegir una alumna de la tabla, o al
+         quedar registrada desde Direccion. Escribirlo a mano tambien funciona:
+         la consulta sale sin pulsar nada. -->
     <form data-prueba="formulario-mensualidades" class="formulario formulario-corto" novalidate>
       <label>Id de la alumna
         <input name="idAlumna" data-prueba="campo-id-alumna" inputmode="numeric" autocomplete="off">
       </label>
-      <button type="submit" class="primario" data-prueba="btn-cargar-mensualidades">Consultar mensualidades</button>
     </form>
 
     <table data-prueba="tabla-mensualidades">

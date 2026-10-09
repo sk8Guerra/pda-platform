@@ -25,6 +25,13 @@ router.get('/solicitudes', requiereSesion, asincrono(async (req, res) => {
   res.json({ solicitudes: await servicio.listarSolicitudes(req.query.estado || null) });
 }));
 
+// Alumnas ya registradas. Vive en inscripcion porque es este modulo el que las
+// crea al aceptar una solicitud; pagos la consume por HTTP, como cualquier otro
+// cliente, sin invocar nada de aqui por dentro (RNF-023).
+router.get('/alumnas', requiereSesion, asincrono(async (_req, res) => {
+  res.json({ alumnas: await servicio.listarAlumnas() });
+}));
+
 router.get('/solicitudes/:id', requiereSesion, asincrono(async (req, res) => {
   res.json(await servicio.obtenerSolicitud(Number(req.params.id)));
 }));

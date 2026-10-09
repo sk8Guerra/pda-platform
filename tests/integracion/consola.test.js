@@ -60,14 +60,15 @@ describe('entrega de la consola operativa', () => {
 
   const anclajes = [
     'tab-catalogo', 'tab-solicitud', 'tab-direccion', 'tab-pagos',
-    'btn-cargar-catalogo', 'tabla-disciplinas', 'tabla-clases',
+    'btn-abrir-sesion', 'btn-cerrar-sesion',
+    'tabla-disciplinas', 'tabla-clases',
     'formulario-solicitud', 'campo-nombre-aspirante', 'campo-fecha-nacimiento',
     'campo-disciplina', 'campo-nombre-encargado', 'btn-enviar-solicitud',
     'resultado-solicitud', 'formulario-sesion', 'campo-correo-sesion',
     'campo-contrasena', 'btn-iniciar-sesion', 'estado-sesion',
     'formulario-resolucion', 'campo-id-solicitud', 'campo-clase', 'campo-nivel',
     'btn-aceptar', 'btn-rechazar', 'resultado-resolucion',
-    'campo-id-alumna', 'btn-cargar-mensualidades', 'tabla-mensualidades',
+    'campo-id-alumna', 'tabla-alumnas', 'tabla-mensualidades',
     'campo-id-mensualidad', 'campo-medio-pago', 'btn-pagar', 'resultado-pago',
   ];
 
